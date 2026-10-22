@@ -1,0 +1,11 @@
+{
+  "name": "MyCoRe Forward Merge",
+  "description": "Opens a pull request merging a version branch into the next newer one.",
+  "categories": [
+    "Java",
+    "Maven"
+  ],
+  "filePatterns": [
+    "pom.xml$"
+  ]
+}

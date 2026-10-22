@@ -1,0 +1,89 @@
+name: Maven Setup
+description: Checkout and set up the JDK with Maven cache, optional server credentials, browsers and project setup.
+
+inputs:
+  java-version:
+    description: Java version to use (e.g. '25')
+    required: true
+  server-id:
+    description: Maven server id to configure for authentication (optional)
+    required: false
+    default: ''
+  submodules:
+    description: Whether to checkout submodules ('false', 'true' or 'recursive')
+    required: false
+    default: 'false'
+  setup-browser:
+    description: Put geckodriver and chromedriver on the PATH and select Firefox for Selenium
+    required: false
+    default: 'false'
+  project-setup:
+    description: Run the composite action at ./.github/actions/project-setup of the calling repository
+    required: false
+    default: 'false'
+  fetch-depth:
+    description: Number of commits to fetch, 0 for the full history and all tags
+    required: false
+    default: '1'
+  persist-credentials:
+    description: Keep the token in the git config, needed to push
+    required: false
+    default: 'false'
+  token:
+    description: Token used for the checkout
+    required: false
+    default: ${{ github.token }}
+  gpg-private-key:
+    description: Armored GPG private key to import for signing, passphrase is read from MAVEN_GPG_PASSPHRASE
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      with:
+        fetch-depth: ${{ inputs.fetch-depth }}
+        persist-credentials: ${{ inputs.persist-credentials }}
+        token: ${{ inputs.token }}
+        submodules: ${{ inputs.submodules }}
+
+    - name: Set up JDK ${{ inputs.java-version }}
+      uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+      with:
+        java-version: ${{ inputs.java-version }}
+        distribution: 'temurin'
+        cache: 'maven'
+        server-id: ${{ inputs.server-id != '' && inputs.server-id || 'unused' }}
+        server-username: ${{ inputs.server-id != '' && 'MAVEN_USERNAME' || '' }}
+        server-password: ${{ inputs.server-id != '' && 'MAVEN_PASSWORD' || '' }}
+        gpg-private-key: ${{ inputs.gpg-private-key }}
+        gpg-passphrase: ${{ inputs.gpg-private-key != '' && 'MAVEN_GPG_PASSPHRASE' || '' }}
+
+    - name: Set up temporary directory
+      shell: bash
+      env:
+        RUN_TMP: ${{ runner.temp }}/${{ github.run_id }}.tmp
+      run: |
+        mkdir -p "$RUN_TMP"
+        echo "TMPDIR=$RUN_TMP" >> "$GITHUB_ENV"
+
+    - name: Set up browser
+      if: inputs.setup-browser == 'true'
+      shell: bash
+      run: |
+        if [ -z "${GECKOWEBDRIVER:-}" ] || [ -z "${CHROMEWEBDRIVER:-}" ]; then
+          echo "::error::setup-browser needs GECKOWEBDRIVER and CHROMEWEBDRIVER, which only GitHub-hosted Ubuntu runners provide"
+          exit 1
+        fi
+        echo "$GECKOWEBDRIVER" >> "$GITHUB_PATH"
+        echo "$CHROMEWEBDRIVER" >> "$GITHUB_PATH"
+        echo "FIREFOX_BIN=$(which firefox)" >> "$GITHUB_ENV"
+        echo "SELENIUM_BROWSER=firefox" >> "$GITHUB_ENV"
+        firefox --version
+        "$GECKOWEBDRIVER/geckodriver" --version
+
+    # './' is the workspace of the calling project, '$/' would point to this repository
+    - name: Project setup
+      if: inputs.project-setup == 'true'
+      uses: ./.github/actions/project-setup

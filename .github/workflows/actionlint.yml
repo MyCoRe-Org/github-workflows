@@ -1,0 +1,69 @@
+name: actionlint
+
+on:
+  push:
+    paths:
+      - '.github/**'
+      - 'workflow-templates/**'
+  pull_request:
+    paths:
+      - '.github/**'
+      - 'workflow-templates/**'
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      # update VERSION and SHA256 together, from actionlint_<version>_checksums.txt of the release
+      - name: Install actionlint
+        env:
+          VERSION: '1.7.12'
+          SHA256: '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8'
+        run: |
+          curl -sSfL -o "${RUNNER_TEMP}/actionlint.tar.gz" \
+            "https://github.com/rhysd/actionlint/releases/download/v${VERSION}/actionlint_${VERSION}_linux_amd64.tar.gz"
+          echo "${SHA256}  ${RUNNER_TEMP}/actionlint.tar.gz" | sha256sum --check --strict
+          tar -xzf "${RUNNER_TEMP}/actionlint.tar.gz" -C "${RUNNER_TEMP}" actionlint
+
+      # the self-repository syntax $/ is not supported yet, https://github.com/rhysd/actionlint/issues/711
+      - name: Run actionlint
+        run: |
+          "${RUNNER_TEMP}/actionlint" -color -ignore 'specifying action "\$/'
+
+      # GitHub replaces $default-branch when a project creates a workflow from a template
+      - name: Run actionlint on the workflow templates
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p "${RUNNER_TEMP}/templates"
+          for template in workflow-templates/*.yml; do
+            sed 's/[$]default-branch/main/g' "$template" > "${RUNNER_TEMP}/templates/$(basename "$template")"
+          done
+          "${RUNNER_TEMP}/actionlint" -color "${RUNNER_TEMP}"/templates/*.yml
+
+      # composite actions are not covered by actionlint, their run blocks are checked
+      # like actionlint does for workflows, with expressions replaced by a placeholder
+      - name: Run shellcheck
+        if: ${{ !cancelled() }}
+        run: |
+          FAILED=0
+          shellcheck .github/actions/*/*.sh || FAILED=1
+          for action in .github/actions/*/action.yml; do
+            name="$(basename "$(dirname "$action")")"
+            count="$(yq '.runs.steps | length' "$action")"
+            for ((i = 0; i < count; i++)); do
+              [ "$(yq ".runs.steps[$i] | has(\"run\")" "$action")" = true ] || continue
+              script="${RUNNER_TEMP}/${name}-step-${i}.sh"
+              # [{] keeps the pattern from being read as an expression by GitHub
+              yq ".runs.steps[$i].run" "$action" | sed 's/\$[{]{[^}]*}}/EXPR/g' > "$script"
+              echo "shellcheck ${name}, step ${i}"
+              shellcheck --shell=bash "$script" || FAILED=1
+            done
+          done
+          exit "$FAILED"

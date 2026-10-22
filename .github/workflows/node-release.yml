@@ -1,0 +1,85 @@
+name: Node Release
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        required: true
+      build-script:
+        type: string
+        default: 'build'
+      publish-command:
+        type: string
+        default: 'yarn npm publish --access public'
+      registry-url:
+        type: string
+        default: 'https://registry.npmjs.org'
+      create-release:
+        type: boolean
+        default: true
+    secrets:
+      MATRIX_ACCESS_TOKEN:
+        required: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Check tag
+        if: github.ref_type != 'tag'
+        run: |
+          echo "::error::node-release must run on a tag, not on ${GITHUB_REF}"
+          exit 1
+
+      - uses: $/.github/actions/node-setup
+        with:
+          node-version: ${{ inputs.node-version }}
+          registry-url: ${{ inputs.registry-url }}
+
+      - name: Build
+        if: inputs.build-script != ''
+        env:
+          BUILD_SCRIPT: ${{ inputs.build-script }}
+        run: yarn run "$BUILD_SCRIPT"
+
+      - name: Publish
+        env:
+          PUBLISH_COMMAND: ${{ inputs.publish-command }}
+        run: eval "$PUBLISH_COMMAND"
+
+      - name: Create GitHub release
+        if: inputs.create-release
+        uses: $/.github/actions/github-release
+        with:
+          tag: ${{ github.ref_name }}
+
+      - name: Compose the notification
+        id: notification
+        if: ${{ !cancelled() }}
+        env:
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          JOB_STATUS: ${{ job.status }}
+          LINK: ${{ inputs.create-release && format('{0}/{1}/releases/tag/{2}', github.server_url, github.repository, github.ref_name) || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "$JOB_STATUS" = success ]; then
+            MESSAGE="✅ ${REPOSITORY} ${TAG} published: ${LINK}"
+          else
+            MESSAGE="❌ Publishing ${TAG} of ${REPOSITORY} failed: ${RUN_URL}"
+          fi
+          echo "message=${MESSAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Notify Matrix
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: $/.github/actions/matrix-notify
+        with:
+          message: ${{ steps.notification.outputs.message }}
+          homeserver: ${{ vars.MATRIX_HOMESERVER }}
+          room-id: ${{ vars.MATRIX_ROOM_ID }}
+          token: ${{ secrets.MATRIX_ACCESS_TOKEN }}

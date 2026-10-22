@@ -1,0 +1,11 @@
+{
+  "name": "MyCoRe Release",
+  "description": "Releases a Maven project with the maven-release-plugin, started by hand.",
+  "categories": [
+    "Java",
+    "Maven"
+  ],
+  "filePatterns": [
+    "pom.xml$"
+  ]
+}

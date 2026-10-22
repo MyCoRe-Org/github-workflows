@@ -1,0 +1,66 @@
+name: Maven Build
+
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        type: string
+        required: true
+      maven-args:
+        type: string
+        default: '--batch-mode verify'
+      maven-opts:
+        type: string
+        default: ''
+      runs-on:
+        type: string
+        default: 'ubuntu-latest'
+      submodules:
+        type: string
+        default: 'false'
+      setup-browser:
+        type: boolean
+        default: false
+      project-setup:
+        type: boolean
+        default: false
+      failure-logs:
+        type: string
+        default: ''
+      failure-logs-name:
+        type: string
+        default: 'test-results'
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+    steps:
+      - uses: $/.github/actions/maven-setup
+        with:
+          java-version: ${{ inputs.java-version }}
+          submodules: ${{ inputs.submodules }}
+          setup-browser: ${{ inputs.setup-browser }}
+          project-setup: ${{ inputs.project-setup }}
+
+      - name: Build with Maven
+        env:
+          BUILD_ARGS: ${{ inputs.maven-args }}
+          MAVEN_OPTS: ${{ inputs.maven-opts }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r args; do
+            [ -z "$args" ] && continue
+            echo "::group::mvn $args"
+            read -r -a ARGS <<< "$args"
+            mvn "${ARGS[@]}"
+            echo "::endgroup::"
+          done <<< "$BUILD_ARGS"
+
+      - name: Upload logs on build failure
+        if: (failure() || cancelled()) && inputs.failure-logs != ''
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ${{ inputs.failure-logs-name }}
+          path: ${{ inputs.failure-logs }}

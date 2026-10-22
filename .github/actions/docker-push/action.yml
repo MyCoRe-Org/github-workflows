@@ -1,0 +1,50 @@
+name: Docker Push
+description: Build Docker images with several tags and push them to Docker Hub.
+
+inputs:
+  images:
+    description: One image per line as '<image> <context> [<dockerfile>]', dockerfile defaults to '<context>/Dockerfile'
+    required: true
+  tags:
+    description: Tags to apply to every image, separated by whitespace
+    required: true
+  working-directory:
+    description: Directory the contexts are relative to
+    required: false
+    default: '.'
+  username:
+    description: Docker Hub username
+    required: true
+  password:
+    description: Docker Hub token
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Login to Docker Hub
+      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+      with:
+        username: ${{ inputs.username }}
+        password: ${{ inputs.password }}
+
+    - name: Build and push images
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        IMAGES: ${{ inputs.images }}
+        TAGS: ${{ inputs.tags }}
+      run: |
+        set -euo pipefail
+        while read -r image context dockerfile; do
+          [ -z "$image" ] && continue
+          dockerfile="${dockerfile:-${context%/}/Dockerfile}"
+          TAG_ARGS=()
+          for tag in $TAGS; do
+            TAG_ARGS+=(--tag "${image}:${tag}")
+          done
+          echo "::group::${image}"
+          docker build "$context" --file "$dockerfile" "${TAG_ARGS[@]}"
+          docker push --all-tags "$image"
+          echo "::endgroup::"
+        done <<< "$IMAGES"

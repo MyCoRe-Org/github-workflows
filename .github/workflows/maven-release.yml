@@ -1,0 +1,312 @@
+name: Maven Release
+
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        type: string
+        required: true
+      release-version:
+        type: string
+        default: ''
+      development-version:
+        type: string
+        default: ''
+      dependency-property:
+        type: string
+        default: 'mycore.version'
+      dependency-version:
+        type: string
+        default: ''
+      dependency-development-version:
+        type: string
+        default: ''
+      dependency-artifact:
+        type: string
+        default: ''
+      prepare-args:
+        type: string
+        default: ''
+      perform-args:
+        type: string
+        default: '-Psign-artifacts -DskipTests'
+      release-notes-file:
+        type: string
+        default: ''
+      release-assets:
+        type: string
+        default: |
+          target/checkout/target/*.jar
+          target/checkout/target/*.war
+          target/checkout/*/target/*.jar
+          target/checkout/*/target/*.war
+      docker-images:
+        type: string
+        default: ''
+      setup-browser:
+        type: boolean
+        default: false
+      project-setup:
+        type: boolean
+        default: false
+      environment:
+        type: string
+        default: 'release'
+    outputs:
+      version:
+        value: ${{ jobs.release.outputs.version }}
+    secrets:
+      MAVEN_USERNAME:
+        required: true
+      MAVEN_PASSWORD:
+        required: true
+      MAVEN_GPG_PRIVATE_KEY:
+        required: false
+      MAVEN_GPG_PASSPHRASE:
+        required: false
+      DOCKERHUB_USERNAME:
+        required: false
+      DOCKERHUB_TOKEN:
+        required: false
+      RELEASE_TOKEN:
+        required: false
+      MATRIX_ACCESS_TOKEN:
+        required: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # must differ from the group of the caller, equal groups deadlock
+    concurrency:
+      group: maven-release-job-${{ github.repository }}-${{ github.ref }}
+      cancel-in-progress: false
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.prepare.outputs.version }}
+    steps:
+      - uses: $/.github/actions/maven-setup
+        with:
+          java-version: ${{ inputs.java-version }}
+          server-id: 'central'
+          fetch-depth: '0'
+          persist-credentials: 'true'
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
+          gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          setup-browser: ${{ inputs.setup-browser }}
+          project-setup: ${{ inputs.project-setup }}
+
+      - name: Configure Git author
+        env:
+          ACTOR: ${{ github.actor }}
+        run: |
+          git config user.name "$ACTOR"
+          git config user.email "${ACTOR}@users.noreply.github.com"
+
+      - name: Determine release values
+        id: values
+        env:
+          PROPERTY: ${{ inputs.dependency-property }}
+          DEPENDENCY_VERSION: ${{ inputs.dependency-version }}
+          DEPENDENCY_DEV_VERSION: ${{ inputs.dependency-development-version }}
+          DEPENDENCY_ARTIFACT: ${{ inputs.dependency-artifact }}
+          RELEASE_VERSION: ${{ inputs.release-version }}
+          DEV_VERSION: ${{ inputs.development-version }}
+        run: |
+          set -euo pipefail
+          for value in "$RELEASE_VERSION" "$DEV_VERSION" "$DEPENDENCY_VERSION" "$DEPENDENCY_DEV_VERSION" "$DEPENDENCY_ARTIFACT"; do
+            if [[ "$value" =~ [[:space:]] ]]; then
+              echo "::error::'${value}' contains whitespace"
+              exit 1
+            fi
+          done
+          case "$RELEASE_VERSION" in
+            v* | *-SNAPSHOT)
+              echo "::error::release-version '${RELEASE_VERSION}' must be given without 'v' prefix and without '-SNAPSHOT'"
+              exit 1
+              ;;
+          esac
+          if [ -n "$DEPENDENCY_ARTIFACT" ] && [ -z "$DEPENDENCY_VERSION" ]; then
+            echo "::error::dependency-version is required when dependency-artifact '${DEPENDENCY_ARTIFACT}' is set"
+            exit 1
+          fi
+          if [ -n "$PROPERTY" ]; then
+            if [ -z "$DEPENDENCY_VERSION" ]; then
+              echo "::error::dependency-version is required when dependency-property '${PROPERTY}' is set"
+              exit 1
+            fi
+            case "$DEPENDENCY_VERSION" in
+              *-SNAPSHOT)
+                echo "::error::${PROPERTY} ${DEPENDENCY_VERSION} is a snapshot, the release would fail"
+                exit 1
+                ;;
+            esac
+          fi
+          if [ -n "$DEPENDENCY_ARTIFACT" ]; then
+            GROUP="${DEPENDENCY_ARTIFACT%%:*}"
+            ARTIFACT="${DEPENDENCY_ARTIFACT#*:}"
+            POM_URL="https://repo1.maven.org/maven2/${GROUP//.//}/${ARTIFACT}/${DEPENDENCY_VERSION}/${ARTIFACT}-${DEPENDENCY_VERSION}.pom"
+            if ! curl -sfI "$POM_URL" > /dev/null; then
+              echo "::error::${DEPENDENCY_ARTIFACT}:${DEPENDENCY_VERSION} is not available on Maven Central yet (${POM_URL}). Wait until it is published and start the release again."
+              exit 1
+            fi
+            echo "${DEPENDENCY_ARTIFACT}:${DEPENDENCY_VERSION} is available on Maven Central"
+          fi
+          if [ -n "$RELEASE_VERSION" ]; then
+            REL="$RELEASE_VERSION"
+          else
+            REL="$(mvn --batch-mode --no-transfer-progress -q -N \
+              help:evaluate -Dexpression=project.version -DforceStdout)"
+            REL="${REL%-SNAPSHOT}"
+          fi
+          echo "tag-url=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/tree/v${REL}" >> "$GITHUB_OUTPUT"
+
+      - name: Pin dependency version and scm.url for the release
+        id: pin
+        uses: $/.github/actions/maven-pom-pin
+        with:
+          property: ${{ inputs.dependency-property }}
+          value: ${{ inputs.dependency-version }}
+          scm-url: ${{ steps.values.outputs.tag-url }}
+
+      - name: Commit pinned values
+        run: |
+          if ! git diff --quiet; then
+            git commit -am "Pin dependency version and scm.url for the release"
+          fi
+
+      - name: Prepare release
+        id: prepare
+        env:
+          RELEASE_VERSION: ${{ inputs.release-version }}
+          DEV_VERSION: ${{ inputs.development-version }}
+          PREPARE_ARGS: ${{ inputs.prepare-args }}
+        run: |
+          set -euo pipefail
+          ARGS=(--batch-mode --no-transfer-progress release:prepare -DpushChanges=false "-DtagNameFormat=v@{project.version}")
+          if [ -n "$RELEASE_VERSION" ]; then ARGS+=("-DreleaseVersion=$RELEASE_VERSION"); fi
+          if [ -n "$DEV_VERSION" ]; then ARGS+=("-DdevelopmentVersion=$DEV_VERSION"); fi
+          if [ -n "$PREPARE_ARGS" ]; then ARGS+=("-Darguments=$PREPARE_ARGS"); fi
+          mvn "${ARGS[@]}"
+          VERSION="$(sed -n 's/^scm\.tag=v//p' release.properties)"
+          if [ -z "$VERSION" ]; then
+            echo "::error::could not read scm.tag from release.properties"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Prepared release v$VERSION"
+
+      - name: Restore dependency version and scm.url for the next development iteration
+        uses: $/.github/actions/maven-pom-pin
+        with:
+          property: ${{ inputs.dependency-property }}
+          value: ${{ inputs.dependency-development-version || steps.pin.outputs.previous-property }}
+          scm-url: ${{ steps.pin.outputs.previous-scm-url }}
+
+      - name: Fold restored values into the development commit
+        run: |
+          if ! git diff --quiet; then
+            git commit -a --amend --no-edit
+          fi
+
+      - name: Push release commits and tag
+        env:
+          VERSION: ${{ steps.prepare.outputs.version }}
+        run: git push --atomic origin "HEAD:${GITHUB_REF_NAME}" "refs/tags/v${VERSION}"
+
+      - name: Perform release
+        id: perform
+        env:
+          MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+          PERFORM_ARGS: ${{ inputs.perform-args }}
+        run: |
+          mvn --batch-mode --no-transfer-progress release:perform \
+            -DlocalCheckout=true \
+            -DpushChanges=false \
+            -Darguments="$PERFORM_ARGS"
+
+      - name: Roll back the release
+        id: rollback
+        if: failure() && steps.perform.outcome == 'failure'
+        run: mvn --batch-mode --no-transfer-progress release:rollback -DpushChanges=false
+
+      - name: Restore original dependency version and scm.url
+        if: failure() && steps.rollback.outcome == 'success'
+        uses: $/.github/actions/maven-pom-pin
+        with:
+          property: ${{ inputs.dependency-property }}
+          value: ${{ steps.pin.outputs.previous-property }}
+          scm-url: ${{ steps.pin.outputs.previous-scm-url }}
+
+      - name: Push the rollback
+        id: push-rollback
+        if: failure() && steps.rollback.outcome == 'success'
+        env:
+          VERSION: ${{ steps.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          if ! git diff --quiet; then
+            git commit -a --amend --no-edit
+          fi
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          if git ls-remote --exit-code --tags origin "v${VERSION}" > /dev/null 2>&1; then
+            git push origin ":refs/tags/v${VERSION}"
+          fi
+          echo "::warning::Rolled back v${VERSION}. If the deployment already reached Central, that version stays taken and must not be released again."
+
+      # both steps run after a successful perform, even if the other one fails
+      - name: Push release Docker images
+        if: ${{ !cancelled() && steps.perform.outcome == 'success' && inputs.docker-images != '' }}
+        uses: $/.github/actions/docker-push
+        with:
+          images: ${{ inputs.docker-images }}
+          tags: ${{ steps.prepare.outputs.version }}
+          working-directory: target/checkout
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Create the GitHub release
+        if: ${{ !cancelled() && steps.perform.outcome == 'success' }}
+        uses: $/.github/actions/github-release
+        with:
+          tag: v${{ steps.prepare.outputs.version }}
+          notes-file: ${{ inputs.release-notes-file }}
+          assets: ${{ inputs.release-assets }}
+
+      - name: Compose the notification
+        id: notification
+        if: ${{ !cancelled() }}
+        env:
+          REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ steps.prepare.outputs.version }}
+          JOB_STATUS: ${{ job.status }}
+          PERFORM: ${{ steps.perform.outcome }}
+          ROLLED_BACK: ${{ steps.push-rollback.outcome }}
+          RELEASE_URL: ${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ steps.prepare.outputs.version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "$PERFORM" = success ] && [ "$JOB_STATUS" = success ]; then
+            MESSAGE="✅ ${REPOSITORY} ${VERSION} released: ${RELEASE_URL}"
+          elif [ "$PERFORM" = success ]; then
+            MESSAGE="⚠️ ${REPOSITORY} ${VERSION} released, but Docker images or GitHub release failed: ${RUN_URL}"
+          elif [ "$ROLLED_BACK" = success ]; then
+            MESSAGE="❌ Release ${VERSION} of ${REPOSITORY} failed and was rolled back: ${RUN_URL}"
+          elif [ "$PERFORM" = failure ]; then
+            MESSAGE="❌ Release ${VERSION} of ${REPOSITORY} failed, the rollback did not complete: ${RUN_URL}"
+          else
+            MESSAGE="❌ Release of ${REPOSITORY} failed before anything was pushed: ${RUN_URL}"
+          fi
+          echo "message=${MESSAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Notify Matrix
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: $/.github/actions/matrix-notify
+        with:
+          message: ${{ steps.notification.outputs.message }}
+          homeserver: ${{ vars.MATRIX_HOMESERVER }}
+          room-id: ${{ vars.MATRIX_ROOM_ID }}
+          token: ${{ secrets.MATRIX_ACCESS_TOKEN }}

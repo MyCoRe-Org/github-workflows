@@ -1,0 +1,75 @@
+name: Maven Snapshot Deploy
+
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        type: string
+        required: true
+      skip-tests:
+        type: boolean
+        default: false
+      setup-browser:
+        type: boolean
+        default: false
+      project-setup:
+        type: boolean
+        default: false
+      docker-images:
+        type: string
+        default: ''
+      docker-date-tag:
+        type: boolean
+        default: false
+    secrets:
+      MAVEN_USERNAME:
+        required: true
+      MAVEN_PASSWORD:
+        required: true
+      DOCKERHUB_USERNAME:
+        required: false
+      DOCKERHUB_TOKEN:
+        required: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: $/.github/actions/maven-setup
+        with:
+          java-version: ${{ inputs.java-version }}
+          server-id: 'central'
+          setup-browser: ${{ inputs.setup-browser }}
+          project-setup: ${{ inputs.project-setup }}
+
+      - name: Deploy Snapshot
+        env:
+          MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
+          SKIP_TESTS_FLAG: ${{ inputs.skip-tests && '-DskipTests' || '' }}
+        run: mvn --batch-mode --no-transfer-progress deploy ${SKIP_TESTS_FLAG:+"$SKIP_TESTS_FLAG"}
+
+      - name: Determine Docker tags
+        id: docker-tags
+        if: inputs.docker-images != ''
+        env:
+          DATE_TAG: ${{ inputs.docker-date-tag }}
+        run: |
+          # docker tags must not start with '.' or '-' and are limited to 128 characters, 11 are left for the date
+          REF="$(echo "$GITHUB_REF_NAME" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9._\n-' '-' | sed 's/^[.-]*//' | cut -c1-117)"
+          TAGS="$REF"
+          if [ "$DATE_TAG" = "true" ]; then
+            TAGS="$TAGS ${REF}-$(date +'%Y-%m-%d')"
+          fi
+          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
+
+      - name: Push snapshot Docker images
+        if: inputs.docker-images != ''
+        uses: $/.github/actions/docker-push
+        with:
+          images: ${{ inputs.docker-images }}
+          tags: ${{ steps.docker-tags.outputs.tags }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
