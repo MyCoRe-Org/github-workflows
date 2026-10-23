@@ -1,0 +1,63 @@
+name: Snapshot Refresh
+
+on:
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+# a run waits for all deploys, a second run waits for the first instead of dispatching everything twice
+concurrency:
+  group: snapshot-refresh
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      # GitHub disables scheduled workflows after 60 days without repository activity. Enabling the workflow
+      # on every run is reported to reset that period, GitHub does not document it.
+      - name: Keep the schedule enabled
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --method PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/snapshot-refresh.yml/enable"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read targets
+        id: read
+        run: |
+          {
+            echo 'targets<<__TARGETS_EOF__'
+            cat snapshot-targets.txt
+            # the file may lack a final newline, the delimiter must start a line of its own
+            echo
+            echo '__TARGETS_EOF__'
+          } >> "$GITHUB_OUTPUT"
+
+      - id: dispatch
+        uses: $/.github/actions/workflow-dispatch
+        with:
+          targets: ${{ steps.read.outputs.targets }}
+          default-branch: main
+          wait: 'true'
+          token: ${{ secrets.DISPATCH_TOKEN }}
+
+      - name: Notify Matrix
+        if: failure()
+        uses: $/.github/actions/matrix-notify
+        with:
+          message: |
+            ❌ Snapshot refresh failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            ${{ steps.dispatch.outputs.failures }}
+          homeserver: ${{ vars.MATRIX_HOMESERVER }}
+          room-id: ${{ vars.MATRIX_ROOM_ID }}
+          token: ${{ secrets.MATRIX_ACCESS_TOKEN }}

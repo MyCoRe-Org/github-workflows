@@ -1,0 +1,48 @@
+name: Node Setup
+description: Checkout, set up Node.js with Corepack and install dependencies with Yarn.
+
+inputs:
+  node-version:
+    description: Node.js version to use (e.g. '20', '22')
+    required: true
+  registry-url:
+    description: Registry to configure for publishing (optional)
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+
+    - name: Set up Node.js ${{ inputs.node-version }}
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: ${{ inputs.node-version }}
+        registry-url: ${{ inputs.registry-url }}
+
+    - name: Enable Corepack
+      shell: bash
+      run: |
+        # Node.js 25 and newer no longer ship Corepack
+        if ! command -v corepack > /dev/null; then
+          npm install --global corepack@latest
+        fi
+        corepack enable
+
+    - name: Cache node_modules
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: node_modules
+        key: node-${{ runner.os }}-${{ runner.arch }}-${{ inputs.node-version }}-${{ hashFiles('**/yarn.lock') }}
+
+    - name: Install dependencies
+      shell: bash
+      run: |
+        if [[ "$(yarn --version)" == 1.* ]]; then
+          yarn install --frozen-lockfile
+        else
+          yarn install --immutable
+        fi

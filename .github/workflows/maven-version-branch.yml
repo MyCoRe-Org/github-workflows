@@ -1,0 +1,157 @@
+name: Maven Version Branch
+
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        type: string
+        required: true
+      branch:
+        type: string
+        required: true
+      development-version:
+        type: string
+        required: true
+      dependency-property:
+        type: string
+        default: 'mycore.version'
+      dependency-development-version:
+        type: string
+        default: ''
+      environment:
+        type: string
+        default: 'release'
+    secrets:
+      RELEASE_TOKEN:
+        required: false
+      MATRIX_ACCESS_TOKEN:
+        required: false
+
+jobs:
+  branch:
+    runs-on: ubuntu-latest
+    # must differ from the group of the caller, equal groups deadlock
+    concurrency:
+      group: maven-version-branch-job-${{ github.repository }}
+      cancel-in-progress: false
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: write
+    steps:
+      - uses: $/.github/actions/maven-setup
+        with:
+          java-version: ${{ inputs.java-version }}
+          fetch-depth: '0'
+          persist-credentials: 'true'
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
+
+      - name: Configure Git author
+        env:
+          ACTOR: ${{ github.actor }}
+          ACTOR_ID: ${{ github.actor_id }}
+        run: |
+          git config user.name "$ACTOR"
+          # the noreply address with the id links the commits to the account, also after a rename
+          git config user.email "${ACTOR_ID}+${ACTOR}@users.noreply.github.com"
+
+      - name: Check the inputs
+        env:
+          BRANCH: ${{ inputs.branch }}
+          DEV_VERSION: ${{ inputs.development-version }}
+          DEPENDENCY_DEV_VERSION: ${{ inputs.dependency-development-version }}
+        run: |
+          set -euo pipefail
+          for value in "$BRANCH" "$DEV_VERSION" "$DEPENDENCY_DEV_VERSION"; do
+            if [[ "$value" =~ [[:space:]] ]]; then
+              echo "::error::'${value}' contains whitespace"
+              exit 1
+            fi
+          done
+          if ! git check-ref-format --branch "$BRANCH" > /dev/null 2>&1; then
+            echo "::error::'${BRANCH}' is not a valid branch name"
+            exit 1
+          fi
+          STATUS=0
+          git ls-remote --exit-code origin "refs/heads/${BRANCH}" > /dev/null || STATUS=$?
+          case "$STATUS" in
+            0)
+              echo "::error::the branch ${BRANCH} exists already"
+              exit 1
+              ;;
+            2) ;;
+            *)
+              echo "::error::cannot check whether the branch ${BRANCH} exists"
+              exit 1
+              ;;
+          esac
+          case "$DEV_VERSION" in
+            *-SNAPSHOT) ;;
+            *)
+              echo "::error::development-version '${DEV_VERSION}' must end with '-SNAPSHOT'"
+              exit 1
+              ;;
+          esac
+          CURRENT="$(mvn --batch-mode --no-transfer-progress -q -N \
+            help:evaluate -Dexpression=project.version -DforceStdout)"
+          if [ "$DEV_VERSION" = "$CURRENT" ]; then
+            echo "::error::development-version '${DEV_VERSION}' is the current version, ${GITHUB_REF_NAME} and ${BRANCH} would deploy the same snapshot"
+            exit 1
+          fi
+
+      - name: Create the branch
+        env:
+          BRANCH: ${{ inputs.branch }}
+          DEV_VERSION: ${{ inputs.development-version }}
+        run: |
+          mvn --batch-mode --no-transfer-progress release:branch \
+            "-DbranchName=${BRANCH}" \
+            "-DdevelopmentVersion=${DEV_VERSION}" \
+            -DautoVersionSubmodules=true \
+            -DupdateBranchVersions=false \
+            -DupdateWorkingCopyVersions=true \
+            -DpushChanges=false
+
+      - name: Set the dependency version for the next development iteration
+        uses: $/.github/actions/maven-pom-pin
+        with:
+          property: ${{ inputs.dependency-property }}
+          value: ${{ inputs.dependency-development-version }}
+
+      - name: Fold the dependency version into the development commit
+        run: |
+          if ! git diff --quiet; then
+            git commit -a --amend --no-edit
+          fi
+
+      - name: Push the branch and the development version
+        env:
+          BRANCH: ${{ inputs.branch }}
+        run: git push --atomic origin "HEAD:${GITHUB_REF_NAME}" "refs/heads/${BRANCH}:refs/heads/${BRANCH}"
+
+      - name: Compose the notification
+        id: notification
+        if: ${{ !cancelled() }}
+        env:
+          REPOSITORY: ${{ github.repository }}
+          BRANCH: ${{ inputs.branch }}
+          DEV_VERSION: ${{ inputs.development-version }}
+          JOB_STATUS: ${{ job.status }}
+          BRANCH_URL: ${{ github.server_url }}/${{ github.repository }}/tree/${{ inputs.branch }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "$JOB_STATUS" = success ]; then
+            MESSAGE="✅ ${REPOSITORY}: branch ${BRANCH} created, ${GITHUB_REF_NAME} is now ${DEV_VERSION}: ${BRANCH_URL}"
+          else
+            MESSAGE="❌ Creating the branch ${BRANCH} in ${REPOSITORY} failed: ${RUN_URL}"
+          fi
+          echo "message=${MESSAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Notify Matrix
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: $/.github/actions/matrix-notify
+        with:
+          message: ${{ steps.notification.outputs.message }}
+          homeserver: ${{ vars.MATRIX_HOMESERVER }}
+          room-id: ${{ vars.MATRIX_ROOM_ID }}
+          token: ${{ secrets.MATRIX_ACCESS_TOKEN }}

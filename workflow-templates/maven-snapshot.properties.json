@@ -1,0 +1,11 @@
+{
+  "name": "MyCoRe Snapshot Deploy",
+  "description": "Deploys the snapshot of main and the version branches to Sonatype Central.",
+  "categories": [
+    "Java",
+    "Maven"
+  ],
+  "filePatterns": [
+    "pom.xml$"
+  ]
+}

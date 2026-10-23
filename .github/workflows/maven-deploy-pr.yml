@@ -1,0 +1,112 @@
+name: Maven Snapshot Deploy (PR)
+
+# Deploys the snapshot of a pull request, built with its code and the Central token. Only for repositories in which
+# everybody with write access is trusted, see docs/maven-deploy-pr.md. Never call it from pull_request_target.
+
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        type: string
+        required: true
+      required-label:
+        type: string
+        default: 'snapshot-deploy'
+      actor:
+        type: string
+        default: ''
+      labels:
+        type: string
+        default: ''
+      payload:
+        type: string
+        default: ''
+      skip-tests:
+        type: boolean
+        default: false
+      setup-browser:
+        type: boolean
+        default: false
+      project-setup:
+        type: boolean
+        default: false
+    secrets:
+      MAVEN_USERNAME:
+        required: true
+      MAVEN_PASSWORD:
+        required: true
+
+jobs:
+  permission:
+    permissions:
+      contents: read
+    uses: $/.github/workflows/require-permission.yml
+    with:
+      actor: ${{ inputs.actor }}
+
+  check:
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      qualifier: ${{ steps.check.outputs.qualifier }}
+    steps:
+      - name: Check the pull request
+        id: check
+        env:
+          EVENT: ${{ github.event_name }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          LABELS: ${{ inputs.labels || join(github.event.pull_request.labels.*.name, ',') }}
+          REQUIRED_LABEL: ${{ inputs.required-label }}
+          PAYLOAD: ${{ inputs.payload || github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          # pull_request_target, workflow_run and comments run with the secrets also for pull requests from forks
+          # and check out the base branch, only pull_request deploys the code of the pull request without that risk
+          if [ "$EVENT" != pull_request ]; then
+            echo "::error::maven-deploy-pr runs for the event pull_request only, not for ${EVENT}"
+            exit 1
+          fi
+          # forks get no secrets with pull_request anyway, this makes the reason visible
+          if [ "$HEAD_REPOSITORY" != "$GITHUB_REPOSITORY" ]; then
+            echo "::error::pull requests from forks are not deployed"
+            exit 1
+          fi
+          if [[ ",${LABELS}," != *",${REQUIRED_LABEL},"* ]]; then
+            echo "::error::the pull request lacks the label ${REQUIRED_LABEL}"
+            exit 1
+          fi
+          # the value of the first line '<key>: <value>' of the description, the key as sed pattern;
+          # the last sed reads everything, an early exit like head -1 would fail the pipeline with SIGPIPE
+          value() {
+            printf '%s\n' "$PAYLOAD" | tr -d '\r' | sed -n "s/^$1:[[:space:]]*//p" | sed -n '1{s/[[:space:]]*$//;p;}'
+          }
+          QUALIFIER="$(value 'snapshot\.qualifier')"
+          # deploy.name is the legacy key of the pull request templates of gbv/reposis_workflows
+          if [ -z "$QUALIFIER" ]; then
+            QUALIFIER="$(value 'deploy\.name')"
+          fi
+          if [ -z "$QUALIFIER" ]; then
+            echo "::error::the description of the pull request has no qualifier, add the line 'snapshot.qualifier: <qualifier>'"
+            exit 1
+          fi
+          if [[ ! "$QUALIFIER" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::the qualifier '${QUALIFIER}' may only contain letters, digits, '.', '_' and '-'"
+            exit 1
+          fi
+          echo "qualifier=${QUALIFIER}" >> "$GITHUB_OUTPUT"
+          echo "Deploying the pull request with the qualifier ${QUALIFIER}"
+
+  deploy:
+    needs: [permission, check]
+    permissions:
+      contents: read
+    uses: $/.github/workflows/maven-deploy.yml
+    with:
+      java-version: ${{ inputs.java-version }}
+      version-qualifier: ${{ needs.check.outputs.qualifier }}
+      skip-tests: ${{ inputs.skip-tests }}
+      setup-browser: ${{ inputs.setup-browser }}
+      project-setup: ${{ inputs.project-setup }}
+    secrets:
+      MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
+      MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}

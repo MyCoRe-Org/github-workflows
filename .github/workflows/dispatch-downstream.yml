@@ -1,0 +1,25 @@
+name: Dispatch Downstream
+
+on:
+  workflow_call:
+    inputs:
+      targets:
+        type: string
+        required: true
+      branch:
+        type: string
+        default: ''
+    secrets:
+      DISPATCH_TOKEN:
+        required: true
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - uses: $/.github/actions/workflow-dispatch
+        with:
+          targets: ${{ inputs.targets }}
+          default-branch: ${{ inputs.branch || github.ref_name }}
+          token: ${{ secrets.DISPATCH_TOKEN }}

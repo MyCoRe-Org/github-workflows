@@ -1,0 +1,53 @@
+name: Require Permission
+
+on:
+  workflow_call:
+    inputs:
+      actor:
+        type: string
+        default: ''
+      required-permission:
+        type: string
+        default: 'write'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check the permission
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ inputs.actor || github.actor }}
+          REQUIRED: ${{ inputs.required-permission }}
+        run: |
+          set -euo pipefail
+          rank() {
+            case "$1" in
+              admin) echo 5 ;;
+              maintain) echo 4 ;;
+              write) echo 3 ;;
+              triage) echo 2 ;;
+              read) echo 1 ;;
+              *) echo 0 ;;
+            esac
+          }
+          # an unknown value would rank 0 and let everybody pass
+          if [ "$(rank "$REQUIRED")" = 0 ]; then
+            echo "::error::unknown required-permission '${REQUIRED}', use admin, maintain, write, triage or read"
+            exit 1
+          fi
+          # GITHUB_TOKEN only covers the repository of the run, so there is no input for another one
+          RESPONSE="$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${ACTOR}/permission")"
+          # 'permission' maps maintain to write and triage to read, 'role_name' is exact
+          # but may name a custom role, which falls back to its base permission
+          ROLE="$(jq -r '.role_name // empty' <<< "$RESPONSE")"
+          if [ "$(rank "$ROLE")" = 0 ]; then
+            ROLE="$(jq -r '.permission // empty' <<< "$RESPONSE")"
+          fi
+          if [ "$(rank "$ROLE")" -lt "$(rank "$REQUIRED")" ] || [ "$(rank "$ROLE")" = 0 ]; then
+            echo "::error::${ACTOR} has the role '${ROLE:-none}' in ${GITHUB_REPOSITORY}, '${REQUIRED}' is required"
+            exit 1
+          fi
+          echo "${ACTOR} has the role '${ROLE}' in ${GITHUB_REPOSITORY}, '${REQUIRED}' is required"

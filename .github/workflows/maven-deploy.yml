@@ -1,0 +1,102 @@
+name: Maven Snapshot Deploy
+
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        type: string
+        required: true
+      skip-tests:
+        type: boolean
+        default: false
+      setup-browser:
+        type: boolean
+        default: false
+      project-setup:
+        type: boolean
+        default: false
+      docker-images:
+        type: string
+        default: ''
+      docker-date-tag:
+        type: boolean
+        default: false
+      version-qualifier:
+        type: string
+        default: ''
+    secrets:
+      MAVEN_USERNAME:
+        required: true
+      MAVEN_PASSWORD:
+        required: true
+      DOCKERHUB_USERNAME:
+        required: false
+      DOCKERHUB_TOKEN:
+        required: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: $/.github/actions/maven-setup
+        with:
+          java-version: ${{ inputs.java-version }}
+          server-id: 'central'
+          setup-browser: ${{ inputs.setup-browser }}
+          project-setup: ${{ inputs.project-setup }}
+
+      # 2026.06.1-SNAPSHOT with the qualifier test becomes 2026.06.1-test-SNAPSHOT
+      - name: Add the version qualifier
+        if: inputs.version-qualifier != ''
+        env:
+          QUALIFIER: ${{ inputs.version-qualifier }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$QUALIFIER" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::version-qualifier '${QUALIFIER}' may only contain letters, digits, '.', '_' and '-'"
+            exit 1
+          fi
+          VERSION="$(mvn --batch-mode --no-transfer-progress -q -N \
+            help:evaluate -Dexpression=project.version -DforceStdout)"
+          case "$VERSION" in
+            *-SNAPSHOT) ;;
+            *)
+              echo "::error::${VERSION} is not a snapshot, only snapshots get a qualifier"
+              exit 1
+              ;;
+          esac
+          QUALIFIED="${VERSION%-SNAPSHOT}-${QUALIFIER}-SNAPSHOT"
+          mvn --batch-mode --no-transfer-progress versions:set -DnewVersion="$QUALIFIED" -DgenerateBackupPoms=false
+          echo "Deploying ${QUALIFIED}"
+
+      - name: Deploy Snapshot
+        env:
+          MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
+          SKIP_TESTS_FLAG: ${{ inputs.skip-tests && '-DskipTests' || '' }}
+        run: mvn --batch-mode --no-transfer-progress deploy ${SKIP_TESTS_FLAG:+"$SKIP_TESTS_FLAG"}
+
+      - name: Determine Docker tags
+        id: docker-tags
+        if: inputs.docker-images != ''
+        env:
+          DATE_TAG: ${{ inputs.docker-date-tag }}
+        run: |
+          # docker tags must not start with '.' or '-' and are limited to 128 characters, 11 are left for the date
+          REF="$(echo "$GITHUB_REF_NAME" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9._\n-' '-' | sed 's/^[.-]*//' | cut -c1-117)"
+          TAGS="$REF"
+          if [ "$DATE_TAG" = "true" ]; then
+            TAGS="$TAGS ${REF}-$(date +'%Y-%m-%d')"
+          fi
+          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
+
+      - name: Push snapshot Docker images
+        if: inputs.docker-images != ''
+        uses: $/.github/actions/docker-push
+        with:
+          images: ${{ inputs.docker-images }}
+          tags: ${{ steps.docker-tags.outputs.tags }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}

@@ -1,0 +1,11 @@
+{
+  "name": "MyCoRe Pull Request Checks",
+  "description": "Builds and tests pull requests of a Maven project.",
+  "categories": [
+    "Java",
+    "Maven"
+  ],
+  "filePatterns": [
+    "pom.xml$"
+  ]
+}

@@ -1,0 +1,96 @@
+name: Lint
+
+on:
+  push:
+    paths:
+      - '.github/**'
+      - 'workflow-templates/**'
+      - 'snapshot-targets.txt'
+  pull_request:
+    paths:
+      - '.github/**'
+      - 'workflow-templates/**'
+      - 'snapshot-targets.txt'
+  # by hand, e.g. after a force push, for which the path filters find no changed files
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # update VERSION and SHA256 together, from actionlint_<version>_checksums.txt of the release
+      - name: Install actionlint
+        env:
+          VERSION: '1.7.12'
+          SHA256: '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8'
+        run: |
+          curl -sSfL -o "${RUNNER_TEMP}/actionlint.tar.gz" \
+            "https://github.com/rhysd/actionlint/releases/download/v${VERSION}/actionlint_${VERSION}_linux_amd64.tar.gz"
+          echo "${SHA256}  ${RUNNER_TEMP}/actionlint.tar.gz" | sha256sum --check --strict
+          tar -xzf "${RUNNER_TEMP}/actionlint.tar.gz" -C "${RUNNER_TEMP}" actionlint
+
+      # the self-repository syntax $/ is not supported yet, https://github.com/rhysd/actionlint/issues/711
+      - name: Run actionlint
+        run: |
+          "${RUNNER_TEMP}/actionlint" -color \
+            -ignore 'specifying action "\$/' \
+            -ignore 'reusable workflow call "\$/'
+
+      # GitHub replaces $default-branch when a project creates a workflow from a template
+      - name: Run actionlint on the workflow templates
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p "${RUNNER_TEMP}/templates"
+          for template in workflow-templates/*.yml; do
+            sed 's/[$]default-branch/main/g' "$template" > "${RUNNER_TEMP}/templates/$(basename "$template")"
+          done
+          "${RUNNER_TEMP}/actionlint" -color "${RUNNER_TEMP}"/templates/*.yml
+
+      # composite actions are not covered by actionlint, their run blocks are checked
+      # like actionlint does for workflows, with expressions replaced by a placeholder
+      - name: Run shellcheck
+        if: ${{ !cancelled() }}
+        run: |
+          FAILED=0
+          shellcheck .github/actions/*/*.sh || FAILED=1
+          for action in .github/actions/*/action.yml; do
+            name="$(basename "$(dirname "$action")")"
+            count="$(yq '.runs.steps | length' "$action")"
+            for ((i = 0; i < count; i++)); do
+              [ "$(yq ".runs.steps[$i] | has(\"run\")" "$action")" = true ] || continue
+              script="${RUNNER_TEMP}/${name}-step-${i}.sh"
+              # [{] keeps the pattern from being read as an expression by GitHub
+              yq ".runs.steps[$i].run" "$action" | sed 's/\$[{]{[^}]*}}/EXPR/g' > "$script"
+              echo "shellcheck ${name}, step ${i}"
+              shellcheck --shell=bash "$script" || FAILED=1
+            done
+          done
+          exit "$FAILED"
+
+      # a broken line would otherwise only show up in the next weekly snapshot refresh
+      - name: Check snapshot-targets.txt
+        if: ${{ !cancelled() }}
+        run: |
+          FAILED=0
+          LINE=0
+          while IFS= read -r line || [ -n "$line" ]; do
+            LINE=$((LINE + 1))
+            line="${line%$'\r'}"
+            [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+            read -r repository workflow branch extra <<< "$line"
+            if [[ ! "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || [[ ! "$workflow" =~ \.ya?ml$ ]] || [ -n "$extra" ]; then
+              echo "::error file=snapshot-targets.txt,line=${LINE}::expected '<owner/repository> <workflow> [<branch or pattern>]', found '${line}'"
+              FAILED=1
+            elif [ "$branch" = '*' ]; then
+              echo "::error file=snapshot-targets.txt,line=${LINE}::'*' would deploy feature branches as well, use a pattern for the version branches"
+              FAILED=1
+            fi
+          done < snapshot-targets.txt
+          exit "$FAILED"

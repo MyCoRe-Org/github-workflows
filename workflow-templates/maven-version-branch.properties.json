@@ -1,0 +1,11 @@
+{
+  "name": "MyCoRe Version Branch",
+  "description": "Creates a version branch like 2026.12.x and sets the next development version.",
+  "categories": [
+    "Java",
+    "Maven"
+  ],
+  "filePatterns": [
+    "pom.xml$"
+  ]
+}

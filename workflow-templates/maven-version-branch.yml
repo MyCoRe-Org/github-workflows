@@ -1,0 +1,29 @@
+name: Maven Version Branch
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Version branch to create from the chosen branch (e.g. 2026.12.x)'
+        required: true
+      developmentVersion:
+        description: 'Version of the chosen branch afterwards (e.g. 2027.06.0-SNAPSHOT)'
+        required: true
+      mycoreDevelopmentVersion:
+        description: 'MyCoRe version of the chosen branch afterwards (e.g. 2027.06.0-SNAPSHOT), empty to keep it'
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  branch:
+    uses: MyCoRe-Org/github-workflows/.github/workflows/maven-version-branch.yml@v1
+    with:
+      java-version: '25'
+      branch: ${{ inputs.branch }}
+      development-version: ${{ inputs.developmentVersion }}
+      dependency-development-version: ${{ inputs.mycoreDevelopmentVersion }}
+    secrets:
+      RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+      MATRIX_ACCESS_TOKEN: ${{ secrets.MATRIX_ACCESS_TOKEN }}

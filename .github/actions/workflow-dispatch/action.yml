@@ -1,0 +1,40 @@
+name: Workflow Dispatch
+description: Dispatch workflows in other repositories, skipping targets whose branch does not exist, and optionally wait for the runs.
+
+inputs:
+  targets:
+    description: One target per line as '<owner/repository> <workflow> [<branch or pattern>]', lines starting with '#' are ignored
+    required: true
+  default-branch:
+    description: Branch used for targets without an explicit branch
+    required: false
+    default: ${{ github.ref_name }}
+  wait:
+    description: Wait for the started runs and fail if one of them fails
+    required: false
+    default: 'false'
+  wait-minutes:
+    description: Maximum minutes to wait, runs not finished by then count as failed. Keep it below the job limit of 360 minutes
+    required: false
+    default: '300'
+  token:
+    description: "Token with 'actions: write' on all target repositories"
+    required: true
+
+outputs:
+  failures:
+    description: The errors, one per line, empty if all targets succeeded
+    value: ${{ steps.dispatch.outputs.failures }}
+
+runs:
+  using: composite
+  steps:
+    - id: dispatch
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        TARGETS: ${{ inputs.targets }}
+        DEFAULT_BRANCH: ${{ inputs.default-branch }}
+        WAIT: ${{ inputs.wait }}
+        WAIT_MINUTES: ${{ inputs.wait-minutes }}
+      run: ${{ github.action_path }}/dispatch.sh

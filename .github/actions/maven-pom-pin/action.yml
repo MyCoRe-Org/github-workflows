@@ -1,0 +1,40 @@
+name: Maven POM Pin
+description: Set a version property and the scm url in a pom.xml and return the previous values.
+
+inputs:
+  property:
+    description: Name of the property to set (e.g. 'mycore.version'), empty to skip
+    required: false
+    default: ''
+  value:
+    description: New value of the property, empty to skip
+    required: false
+    default: ''
+  scm-url:
+    description: New scm url, empty to skip. Skipped as well if the pom has no scm url
+    required: false
+    default: ''
+  pom:
+    description: Path of the pom.xml
+    required: false
+    default: 'pom.xml'
+
+outputs:
+  previous-property:
+    description: Previous value of the property
+    value: ${{ steps.pin.outputs.previous-property }}
+  previous-scm-url:
+    description: Previous scm url, empty if the pom has none
+    value: ${{ steps.pin.outputs.previous-scm-url }}
+
+runs:
+  using: composite
+  steps:
+    - id: pin
+      shell: bash
+      env:
+        POM: ${{ inputs.pom }}
+        PROPERTY: ${{ inputs.property }}
+        VALUE: ${{ inputs.value }}
+        SCM_URL: ${{ inputs.scm-url }}
+      run: ${{ github.action_path }}/pin.sh

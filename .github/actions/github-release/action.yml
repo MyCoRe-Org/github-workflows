@@ -1,0 +1,71 @@
+name: GitHub Release
+description: Create a GitHub release with generated notes, an optional notes file and assets.
+
+inputs:
+  tag:
+    description: Tag of the release (e.g. 'v2025.06.2')
+    required: true
+  version:
+    description: Value replacing '@VERSION@' in the notes file, defaults to the tag without leading 'v'
+    required: false
+    default: ''
+  notes-file:
+    description: File appended to the generated notes, empty to skip
+    required: false
+    default: ''
+  assets:
+    description: Glob patterns of files to attach, one per line
+    required: false
+    default: ''
+  token:
+    description: Token used to create the release
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        TAG: ${{ inputs.tag }}
+        VERSION: ${{ inputs.version }}
+        NOTES_FILE: ${{ inputs.notes-file }}
+        ASSET_PATTERNS: ${{ inputs.assets }}
+      run: |
+        set -euo pipefail
+        VERSION="${VERSION:-${TAG#v}}"
+
+        shopt -s nullglob globstar
+        ASSETS=()
+        while IFS= read -r pattern; do
+          [ -z "$pattern" ] && continue
+          for file in $pattern; do
+            ASSETS+=("$file")
+          done
+        done <<< "$ASSET_PATTERNS"
+        if [ ${#ASSETS[@]} -gt 0 ]; then
+          printf 'attaching %s\n' "${ASSETS[@]}"
+        fi
+
+        if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+          git fetch --quiet --unshallow --tags origin || echo "could not fetch the history, the changelog starts at the latest release"
+        fi
+
+        NOTES_ARGS=(-f "tag_name=${TAG}")
+        if PREV="$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${TAG}^" 2>/dev/null)"; then
+          echo "changelog starts after ${PREV}"
+          NOTES_ARGS+=(-f "previous_tag_name=${PREV}")
+        fi
+        gh api --method POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+          "${NOTES_ARGS[@]}" --jq '.body' > "${RUNNER_TEMP}/release-notes.md"
+
+        if [ -n "$NOTES_FILE" ]; then
+          NOTES="$(< "$NOTES_FILE")"
+          printf '\n%s\n' "${NOTES//@VERSION@/$VERSION}" >> "${RUNNER_TEMP}/release-notes.md"
+        fi
+
+        gh release create "$TAG" \
+          --title "$TAG" \
+          --notes-file "${RUNNER_TEMP}/release-notes.md" \
+          "${ASSETS[@]}"
