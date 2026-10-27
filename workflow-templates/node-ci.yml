@@ -1,0 +1,16 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - $default-branch
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    uses: MyCoRe-Org/github-workflows/.github/workflows/node-build.yml@v1
+    with:
+      node-version: '24'

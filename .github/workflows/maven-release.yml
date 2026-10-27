@@ -1,0 +1,799 @@
+name: Maven Release
+
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        type: string
+        required: true
+      release-version:
+        type: string
+        default: ''
+      development-version:
+        type: string
+        default: ''
+      dependency-property:
+        type: string
+        default: 'mycore.version'
+      dependency-version:
+        type: string
+        default: ''
+      dependency-development-version:
+        type: string
+        default: ''
+      dependency-artifact:
+        type: string
+        default: ''
+      prepare-args:
+        type: string
+        default: ''
+      build-args:
+        type: string
+        default: '-Prelease-profile -DskipTests'
+      maven-opts:
+        type: string
+        default: ''
+      group-id-prefix:
+        type: string
+        default: 'org.mycore'
+      release-notes-file:
+        type: string
+        default: ''
+      release-assets:
+        type: string
+        default: |
+          target/*.jar
+          target/*.war
+          */target/*.jar
+          */target/*.war
+      docker-images:
+        type: string
+        default: ''
+      setup-browser:
+        type: boolean
+        default: false
+      project-setup:
+        type: boolean
+        default: false
+      environment:
+        type: string
+        default: 'release'
+    outputs:
+      # set by push once branch and tag are pushed, prepare runs code of the project
+      version:
+        value: ${{ jobs.push.outputs.version }}
+    secrets:
+      MAVEN_USERNAME:
+        required: true
+      MAVEN_PASSWORD:
+        required: true
+      MAVEN_GPG_PRIVATE_KEY:
+        required: false
+      MAVEN_GPG_PASSPHRASE:
+        required: false
+      DOCKERHUB_USERNAME:
+        required: false
+      DOCKERHUB_TOKEN:
+        required: false
+      RELEASE_APP_PRIVATE_KEY:
+        required: false
+      MATRIX_ACCESS_TOKEN:
+        required: false
+
+# Code of the project, the tests, Maven plugins and npm packages included, only runs in prepare and build, which get
+# no secret. The jobs with secrets run no code of the project and check what they get from these two.
+jobs:
+  # fails before anything is built
+  check:
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+      deployment: false
+    permissions: {}
+    steps:
+      - uses: $/.github/actions/check-trigger
+        with:
+          workflow: maven-release
+          dispatch-actor: ${{ vars.DISPATCH_ACTOR }}
+
+      - name: Check the inputs
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          PROPERTY: ${{ inputs.dependency-property }}
+          DEPENDENCY_VERSION: ${{ inputs.dependency-version }}
+          DEPENDENCY_DEV_VERSION: ${{ inputs.dependency-development-version }}
+          DEPENDENCY_ARTIFACT: ${{ inputs.dependency-artifact }}
+          RELEASE_VERSION: ${{ inputs.release-version }}
+          DEV_VERSION: ${{ inputs.development-version }}
+        run: |
+          set -euo pipefail
+          if [ -z "$ENVIRONMENT" ]; then
+            echo "::error::environment is empty, the release secrets belong in an environment"
+            exit 1
+          fi
+          for value in "$RELEASE_VERSION" "$DEV_VERSION" "$DEPENDENCY_VERSION" "$DEPENDENCY_DEV_VERSION" "$DEPENDENCY_ARTIFACT"; do
+            if [[ "$value" =~ [[:space:]] ]]; then
+              echo "::error::'${value}' contains whitespace"
+              exit 1
+            fi
+          done
+          case "$RELEASE_VERSION" in
+            v* | *-SNAPSHOT)
+              echo "::error::release-version '${RELEASE_VERSION}' must be given without 'v' prefix and without '-SNAPSHOT'"
+              exit 1
+              ;;
+          esac
+          if [ -n "$DEPENDENCY_ARTIFACT" ] && [ -z "$DEPENDENCY_VERSION" ]; then
+            echo "::error::dependency-version is required when dependency-artifact '${DEPENDENCY_ARTIFACT}' is set"
+            exit 1
+          fi
+          if [ -n "$PROPERTY" ]; then
+            if [ -z "$DEPENDENCY_VERSION" ]; then
+              echo "::error::dependency-version is required when dependency-property '${PROPERTY}' is set"
+              exit 1
+            fi
+            case "$DEPENDENCY_VERSION" in
+              *-SNAPSHOT)
+                echo "::error::${PROPERTY} ${DEPENDENCY_VERSION} is a snapshot, the release would fail"
+                exit 1
+                ;;
+            esac
+          fi
+          if [ -n "$DEPENDENCY_ARTIFACT" ]; then
+            GROUP="${DEPENDENCY_ARTIFACT%%:*}"
+            ARTIFACT="${DEPENDENCY_ARTIFACT#*:}"
+            POM_URL="https://repo1.maven.org/maven2/${GROUP//.//}/${ARTIFACT}/${DEPENDENCY_VERSION}/${ARTIFACT}-${DEPENDENCY_VERSION}.pom"
+            if ! curl -sfI --connect-timeout 10 --max-time 30 --retry 2 "$POM_URL" > /dev/null; then
+              echo "::error::${DEPENDENCY_ARTIFACT}:${DEPENDENCY_VERSION} is not available on Maven Central yet (${POM_URL}). Wait until it is published and start the release again."
+              exit 1
+            fi
+            echo "${DEPENDENCY_ARTIFACT}:${DEPENDENCY_VERSION} is available on Maven Central"
+          fi
+
+      # missing secrets would otherwise only show in publish, after the push
+      - name: Check the secrets
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          DOCKER_IMAGES: ${{ inputs.docker-images }}
+          APP_CLIENT_ID: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          # whether the secrets are set, not their values
+          HAS_CENTRAL: ${{ secrets.MAVEN_USERNAME != '' && secrets.MAVEN_PASSWORD != '' }}
+          HAS_GPG_KEY: ${{ secrets.MAVEN_GPG_PRIVATE_KEY != '' }}
+          HAS_DOCKERHUB: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+          HAS_APP_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY != '' }}
+        run: |
+          FAILED=0
+          missing() { # missing <message>
+            echo "::error::$1. The release secrets belong in the environment ${ENVIRONMENT}, the caller passes them on by name"
+            FAILED=1
+          }
+          [ "$HAS_CENTRAL" = true ] || missing "MAVEN_USERNAME or MAVEN_PASSWORD is empty"
+          [ "$HAS_GPG_KEY" = true ] || missing "MAVEN_GPG_PRIVATE_KEY is empty"
+          if [ -n "${DOCKER_IMAGES//[[:space:]]/}" ] && [ "$HAS_DOCKERHUB" != true ]; then
+            missing "DOCKERHUB_USERNAME or DOCKERHUB_TOKEN is empty, docker-images needs them"
+          fi
+          if [ -n "$APP_CLIENT_ID" ] && [ "$HAS_APP_KEY" != true ]; then
+            missing "RELEASE_APP_PRIVATE_KEY is empty, but RELEASE_APP_CLIENT_ID is set"
+          fi
+          exit "$FAILED"
+
+  # release:prepare with the tests, its result is a Git bundle that push checks
+  prepare:
+    needs: check
+    runs-on: ubuntu-latest
+    # push only lets the changes of a release pass, a poisoned cache entry cannot get more through
+    cache-mode: read
+    permissions:
+      contents: read
+    # for every Maven run, release:prepare passes it on to its build, some projects to their integration tests
+    env:
+      MAVEN_OPTS: ${{ inputs.maven-opts }}
+    outputs:
+      version: ${{ steps.prepare.outputs.version }}
+      development-version: ${{ steps.bundle.outputs.development-version }}
+    steps:
+      - uses: $/.github/actions/maven-setup
+        with:
+          java-version: ${{ inputs.java-version }}
+          fetch-depth: '0'
+          setup-browser: ${{ inputs.setup-browser }}
+          project-setup: ${{ inputs.project-setup }}
+
+      - name: Configure Git author
+        env:
+          ACTOR: ${{ github.actor }}
+          ACTOR_ID: ${{ github.actor_id }}
+        run: |
+          git config user.name "$ACTOR"
+          # the noreply address with the id links the commits to the account, also after a rename
+          git config user.email "${ACTOR_ID}+${ACTOR}@users.noreply.github.com"
+
+      - name: Determine the url of the tag
+        id: values
+        env:
+          RELEASE_VERSION: ${{ inputs.release-version }}
+        run: |
+          set -euo pipefail
+          if [ -n "$RELEASE_VERSION" ]; then
+            REL="$RELEASE_VERSION"
+          else
+            # pinned, mycore-parent does not manage it and Dependabot does not see it.
+            # Maven writes its errors to stdout, they are printed if it fails
+            REL="$(mvn --batch-mode --no-transfer-progress -q -N \
+              org.apache.maven.plugins:maven-help-plugin:3.5.2:evaluate -Dexpression=project.version -DforceStdout)" \
+              || { echo "$REL"; exit 1; }
+            REL="${REL%-SNAPSHOT}"
+          fi
+          echo "tag-url=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/tree/v${REL}" >> "$GITHUB_OUTPUT"
+
+      - name: Pin dependency version and scm.url for the release
+        id: pin
+        uses: $/.github/actions/maven-pom-pin
+        with:
+          property: ${{ inputs.dependency-property }}
+          value: ${{ inputs.dependency-version }}
+          scm-url: ${{ steps.values.outputs.tag-url }}
+
+      - name: Commit pinned values
+        run: |
+          if ! git diff --quiet; then
+            git commit -am "Pin dependency version and scm.url for the release"
+          fi
+
+      - name: Prepare release
+        id: prepare
+        env:
+          RELEASE_VERSION: ${{ inputs.release-version }}
+          DEV_VERSION: ${{ inputs.development-version }}
+          PREPARE_ARGS: ${{ inputs.prepare-args }}
+        run: |
+          set -euo pipefail
+          ARGS=(--batch-mode --no-transfer-progress release:prepare -DpushChanges=false "-DtagNameFormat=v@{project.version}")
+          if [ -n "$RELEASE_VERSION" ]; then ARGS+=("-DreleaseVersion=$RELEASE_VERSION"); fi
+          if [ -n "$DEV_VERSION" ]; then ARGS+=("-DdevelopmentVersion=$DEV_VERSION"); fi
+          if [ -n "$PREPARE_ARGS" ]; then ARGS+=("-Darguments=$PREPARE_ARGS"); fi
+          mvn "${ARGS[@]}"
+          VERSION="$(sed -n 's/^scm\.tag=v//p' release.properties)"
+          if [ -z "$VERSION" ]; then
+            echo "::error::could not read scm.tag from release.properties"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Prepared release v$VERSION"
+
+      - name: Restore dependency version and scm.url for the next development iteration
+        uses: $/.github/actions/maven-pom-pin
+        with:
+          property: ${{ inputs.dependency-property }}
+          value: ${{ inputs.dependency-development-version || steps.pin.outputs.previous-property }}
+          scm-url: ${{ steps.pin.outputs.previous-scm-url }}
+
+      - name: Fold restored values into the development commit
+        run: |
+          if ! git diff --quiet; then
+            git commit -a --amend --no-edit
+          fi
+
+      # refs/bundle/branch is the branch after the release, refs/bundle/tag the tag of the release
+      - name: Bundle the commits
+        id: bundle
+        env:
+          VERSION: ${{ steps.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          # pinned, mycore-parent does not manage it and Dependabot does not see it.
+          # Maven writes its errors to stdout, they are printed if it fails
+          DEV="$(mvn --batch-mode --no-transfer-progress -q -N \
+            org.apache.maven.plugins:maven-help-plugin:3.5.2:evaluate -Dexpression=project.version -DforceStdout)" \
+            || { echo "$DEV"; exit 1; }
+          echo "development-version=${DEV}" >> "$GITHUB_OUTPUT"
+          git update-ref refs/bundle/branch HEAD
+          git update-ref refs/bundle/tag "refs/tags/v${VERSION}"
+          git bundle create "${RUNNER_TEMP}/release.bundle" refs/bundle/branch refs/bundle/tag "^${GITHUB_SHA}"
+
+      # overwrite, as a re-run of the whole workflow uploads it again
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-bundle
+          path: ${{ runner.temp }}/release.bundle
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  # builds the tag of the bundle: the unsigned bundle for Central, the release assets and the Docker images
+  build:
+    needs: prepare
+    runs-on: ubuntu-latest
+    # its result is published
+    cache-mode: none
+    permissions:
+      contents: read
+    env:
+      MAVEN_OPTS: ${{ inputs.maven-opts }}
+    outputs:
+      has-assets: ${{ steps.assets.outputs.has-assets }}
+      has-images: ${{ steps.images.outputs.has-images }}
+    steps:
+      - uses: $/.github/actions/maven-setup
+        with:
+          java-version: ${{ inputs.java-version }}
+          setup-browser: ${{ inputs.setup-browser }}
+          project-setup: ${{ inputs.project-setup }}
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-bundle
+          path: ${{ runner.temp }}/bundle
+
+      # push checks the bundle before publish signs anything of this build
+      - name: Check out the tag of the release
+        run: |
+          set -euo pipefail
+          git fetch --quiet --no-tags "${RUNNER_TEMP}/bundle/release.bundle" 'refs/bundle/*:refs/bundle/*'
+          git checkout --quiet --detach refs/bundle/tag
+
+      # deploy-to-central of mycore-parent would upload, so the build deploys into a directory instead. That works
+      # with every parent since 57, whichever version of the central-publishing-maven-plugin it brings. From 0.12.0
+      # on, the plugin could create the bundle itself with -DskipUpload=true, but the parents of the branches since
+      # 2023 bring 0.7.0 to 0.10.0
+      - name: Build the release
+        env:
+          BUILD_ARGS: ${{ inputs.build-args }}
+        run: |
+          set -euo pipefail
+          read -r -a ARGS <<< "$BUILD_ARGS"
+          STAGING="${RUNNER_TEMP}/release-staging"
+          mvn --batch-mode --no-transfer-progress deploy -DskipDeployToCentral \
+            "-DaltDeploymentRepository=release-staging::file://${STAGING}" "${ARGS[@]}"
+          if [ -z "$(find "$STAGING" -type f -name '*.pom' -print -quit 2> /dev/null)" ]; then
+            echo "::error::the build deployed nothing to ${STAGING}"
+            exit 1
+          fi
+          # the files of the components, Central creates the metadata itself
+          (cd "$STAGING" && zip -q -r -X "${RUNNER_TEMP}/central-bundle.zip" . -x '*/maven-metadata.xml*')
+
+      - name: Collect the release assets
+        id: assets
+        env:
+          ASSET_PATTERNS: ${{ inputs.release-assets }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob globstar
+          mkdir -p "${RUNNER_TEMP}/release-assets"
+          COUNT=0
+          while IFS= read -r pattern; do
+            [ -z "$pattern" ] && continue
+            for file in $pattern; do
+              cp "$file" "${RUNNER_TEMP}/release-assets/"
+              COUNT=$((COUNT + 1))
+            done
+          done <<< "$ASSET_PATTERNS"
+          if [ "$COUNT" -gt 0 ]; then
+            echo "has-assets=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # built here without credentials, the job images only pushes them
+      - name: Build the Docker images
+        id: images
+        uses: $/.github/actions/docker-build
+        with:
+          images: ${{ inputs.docker-images }}
+          archive: ${{ runner.temp }}/release-images/images.tar
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: central-bundle
+          path: ${{ runner.temp }}/central-bundle.zip
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+      - if: steps.assets.outputs.has-assets == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/release-assets
+          retention-days: 1
+          overwrite: true
+
+      - if: steps.images.outputs.has-images == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-images
+          path: ${{ runner.temp }}/release-images
+          retention-days: 1
+          overwrite: true
+
+  # checks the bundle of prepare and pushes it
+  push:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    # must differ from the group of the caller, equal groups deadlock
+    concurrency:
+      group: maven-release-job-${{ github.repository }}-${{ github.ref }}
+      cancel-in-progress: false
+    # holds the key of the GitHub App, its deployment branches decide which branches may release
+    environment:
+      name: ${{ inputs.environment }}
+      deployment: false
+    cache-mode: none
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.push.outputs.version }}
+      branch-sha: ${{ steps.bundle.outputs.branch-sha }}
+      tag-sha: ${{ steps.bundle.outputs.tag-sha }}
+    steps:
+      # here as well, a re-run of this job alone does not repeat the job check
+      - uses: $/.github/actions/check-trigger
+        with:
+          workflow: maven-release
+          dispatch-actor: ${{ vars.DISPATCH_ACTOR }}
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-bundle
+          path: ${{ runner.temp }}/bundle
+
+      # the versions come from prepare as well, so they are checked along with the commits
+      - name: Check the bundle
+        id: bundle
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          DEV_VERSION: ${{ needs.prepare.outputs.development-version }}
+          RELEASE_VERSION: ${{ inputs.release-version }}
+          DEVELOPMENT_VERSION: ${{ inputs.development-version }}
+        run: |
+          set -euo pipefail
+          fail() { # fail <reason>
+            echo "::error::the bundle of prepare is refused, $1"
+            exit 1
+          }
+          BUNDLE="${RUNNER_TEMP}/bundle/release.bundle"
+          git bundle verify --quiet "$BUNDLE" > /dev/null 2>&1 || fail "it does not build on ${GITHUB_SHA}"
+          git fetch --quiet --no-tags "$BUNDLE" 'refs/bundle/*:refs/bundle/*'
+          BRANCH_SHA="$(git rev-parse --verify 'refs/bundle/branch^{commit}')"
+          RELEASE_SHA="$(git rev-parse --verify 'refs/bundle/tag^{commit}')"
+
+          # the pin commit, if anything was pinned, then the release commit with the tag and the development commit
+          [ -z "$(git rev-list --min-parents=2 "${GITHUB_SHA}..${BRANCH_SHA}")" ] || fail "it contains a merge commit"
+          git merge-base --is-ancestor "$GITHUB_SHA" "$BRANCH_SHA" || fail "it does not continue ${GITHUB_SHA}"
+          [ "$(git rev-parse "${BRANCH_SHA}^")" = "$RELEASE_SHA" ] || fail "the tag is not on the commit before the development commit"
+          COUNT="$(git rev-list --count "${GITHUB_SHA}..${BRANCH_SHA}")"
+          case "$COUNT" in
+            2) ;;
+            3) echo "pin-sha=$(git rev-parse "${RELEASE_SHA}^")" >> "$GITHUB_OUTPUT" ;;
+            *) fail "it has ${COUNT} commits instead of the pin, release and development commit" ;;
+          esac
+
+          [[ "$VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ && "$VERSION" != *-SNAPSHOT ]] || fail "the release version '${VERSION}' is invalid"
+          [ -z "$RELEASE_VERSION" ] || [ "$VERSION" = "$RELEASE_VERSION" ] || fail "the release version is ${VERSION}, not ${RELEASE_VERSION}"
+          [[ "$DEV_VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*-SNAPSHOT$ ]] || fail "the development version '${DEV_VERSION}' is invalid"
+          [ -z "$DEVELOPMENT_VERSION" ] || [ "$DEV_VERSION" = "$DEVELOPMENT_VERSION" ] || fail "the development version is ${DEV_VERSION}, not ${DEVELOPMENT_VERSION}"
+          {
+            echo "release-sha=${RELEASE_SHA}"
+            echo "branch-sha=${BRANCH_SHA}"
+            echo "tag-sha=$(git rev-parse --verify refs/bundle/tag)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check the pin commit
+        if: steps.bundle.outputs.pin-sha != ''
+        uses: $/.github/actions/pom-diff-check
+        with:
+          from: ${{ github.sha }}
+          to: ${{ steps.bundle.outputs.pin-sha }}
+          name: the pin commit
+          allowed: |
+            url=${{ github.server_url }}/${{ github.repository }}/tree/v${{ needs.prepare.outputs.version }}
+            ${{ inputs.dependency-property }}=${{ inputs.dependency-version }}
+
+      - name: Check the release commit
+        uses: $/.github/actions/pom-diff-check
+        with:
+          from: ${{ github.sha }}
+          to: ${{ steps.bundle.outputs.release-sha }}
+          name: the release commit
+          allowed: |
+            version=${{ needs.prepare.outputs.version }}
+            tag=v${{ needs.prepare.outputs.version }}
+            url=${{ github.server_url }}/${{ github.repository }}/tree/v${{ needs.prepare.outputs.version }}
+            ${{ inputs.dependency-property }}=${{ inputs.dependency-version }}
+            project.build.outputTimestamp=*
+
+      - name: Check the development commit
+        uses: $/.github/actions/pom-diff-check
+        with:
+          from: ${{ github.sha }}
+          to: ${{ steps.bundle.outputs.branch-sha }}
+          name: the development commit
+          allowed: |
+            version=${{ needs.prepare.outputs.development-version }}
+            tag=HEAD
+            ${{ inputs.dependency-property }}=${{ inputs.dependency-development-version }}
+            project.build.outputTimestamp=*
+
+      # valid for one hour and for this repository only, so it is created right before the push
+      - name: Create the push token
+        id: push-token
+        if: vars.RELEASE_APP_CLIENT_ID != ''
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Push the release commits and the tag
+        id: push
+        env:
+          TOKEN: ${{ steps.push-token.outputs.token || github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          AUTH="$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+          echo "::add-mask::${AUTH}"
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/.extraheader" \
+            GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${AUTH}"
+          # the checkout of this job has no hooks, they stay off all the same
+          git -c core.hooksPath=/dev/null push --atomic origin \
+            "refs/bundle/branch:refs/heads/${GITHUB_REF_NAME}" "refs/bundle/tag:refs/tags/v${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+  # signs the bundle of build and publishes it on Central
+  publish:
+    needs: [prepare, build, push]
+    runs-on: ubuntu-latest
+    # the deployment of the environment for this release
+    environment: ${{ inputs.environment }}
+    cache-mode: none
+    permissions:
+      contents: read
+    outputs:
+      deployment-id: ${{ steps.report.outputs.deployment-id }}
+      state: ${{ steps.report.outputs.state }}
+    steps:
+      - uses: $/.github/actions/check-trigger
+        with:
+          workflow: maven-release
+          dispatch-actor: ${{ vars.DISPATCH_ACTOR }}
+
+      # a re-run after a rollback would publish a version that has no tag any longer
+      - name: Check that the tag is still pushed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TAG_SHA: ${{ needs.push.outputs.tag-sha }}
+        run: |
+          set -euo pipefail
+          PUSHED="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v${VERSION}" --jq .object.sha 2> /dev/null || true)"
+          if [ "$PUSHED" != "$TAG_SHA" ]; then
+            echo "::error::the tag v${VERSION} is not the one this run pushed, nothing is published"
+            exit 1
+          fi
+
+      # a re-run waits for the deployment of an earlier attempt, a second upload of the version would be refused
+      # and roll back a release that Central may still publish
+      - name: Look for the deployment of an earlier attempt
+        if: github.run_attempt != '1'
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: central-deployment
+          path: ${{ runner.temp }}/central-deployment
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: central-bundle
+          path: ${{ runner.temp }}/central
+
+      - uses: $/.github/actions/central-publish
+        with:
+          bundle: ${{ runner.temp }}/central/central-bundle.zip
+          version: ${{ needs.prepare.outputs.version }}
+          group-id-prefix: ${{ inputs.group-id-prefix }}
+          deployment-name: ${{ github.repository }} v${{ needs.prepare.outputs.version }}
+          username: ${{ secrets.MAVEN_USERNAME }}
+          password: ${{ secrets.MAVEN_PASSWORD }}
+          gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          gpg-passphrase: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: central-deployment
+          path: ${{ runner.temp }}/central-deployment/deployment-id
+          if-no-files-found: ignore
+          retention-days: 1
+          overwrite: true
+
+      # from the files of central-publish, which are written also when one of its steps fails
+      - name: Report the deployment
+        id: report
+        if: always()
+        run: |
+          DIR="${RUNNER_TEMP}/central-deployment"
+          echo "deployment-id=$(cat "${DIR}/deployment-id" 2> /dev/null || true)" >> "$GITHUB_OUTPUT"
+          echo "state=$(cat "${DIR}/state" 2> /dev/null || true)" >> "$GITHUB_OUTPUT"
+
+  # pushes the images build made, after the release is on Central
+  images:
+    needs: [prepare, build, publish]
+    if: needs.build.outputs.has-images == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+      deployment: false
+    cache-mode: none
+    permissions: {}
+    steps:
+      - uses: $/.github/actions/check-trigger
+        with:
+          workflow: maven-release
+          dispatch-actor: ${{ vars.DISPATCH_ACTOR }}
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-images
+          path: ${{ runner.temp }}/release-images
+
+      - uses: $/.github/actions/docker-push
+        with:
+          images: ${{ inputs.docker-images }}
+          tags: ${{ needs.prepare.outputs.version }}
+          archive: ${{ runner.temp }}/release-images/images.tar
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  github-release:
+    needs: [prepare, build, publish]
+    runs-on: ubuntu-latest
+    cache-mode: none
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: v${{ needs.prepare.outputs.version }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - if: needs.build.outputs.has-assets == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-assets
+          path: release-assets
+
+      - uses: $/.github/actions/github-release
+        with:
+          tag: v${{ needs.prepare.outputs.version }}
+          notes-file: ${{ inputs.release-notes-file }}
+          assets: ${{ needs.build.outputs.has-assets == 'true' && 'release-assets/*' || '' }}
+
+  # only if nothing reached Central or Central refused it, after an upload in an unknown state the version may still be
+  # published, then tag and commits stay
+  rollback:
+    needs: [prepare, push, publish]
+    if: >-
+      always() && needs.push.result == 'success' && needs.publish.result != 'success' &&
+      (needs.publish.outputs.deployment-id == '' || needs.publish.outputs.state == 'FAILED')
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+      deployment: false
+    cache-mode: none
+    permissions:
+      contents: write
+    steps:
+      - uses: $/.github/actions/check-trigger
+        with:
+          workflow: maven-release
+          dispatch-actor: ${{ vars.DISPATCH_ACTOR }}
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Configure Git author
+        env:
+          ACTOR: ${{ github.actor }}
+          ACTOR_ID: ${{ github.actor_id }}
+        run: |
+          git config user.name "$ACTOR"
+          git config user.email "${ACTOR_ID}+${ACTOR}@users.noreply.github.com"
+
+      # the poms are the ones of before the release afterwards, commits pushed since then stay
+      - name: Revert the release commits
+        env:
+          RELEASED: ${{ needs.push.outputs.branch-sha }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          if ! git merge-base --is-ancestor "$RELEASED" HEAD; then
+            echo "::error::${GITHUB_REF_NAME} does not contain the release commits any longer"
+            exit 1
+          fi
+          if ! git revert --no-commit "${GITHUB_SHA}..${RELEASED}"; then
+            git revert --abort 2> /dev/null || true
+            echo "::error::the release commits cannot be reverted, later commits change the same lines"
+            exit 1
+          fi
+          git commit --quiet -m "Roll back the release of v${VERSION}"
+
+      - name: Create the push token
+        id: push-token
+        if: vars.RELEASE_APP_CLIENT_ID != ''
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Push the rollback and delete the tag
+        env:
+          TOKEN: ${{ steps.push-token.outputs.token || github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          AUTH="$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+          echo "::add-mask::${AUTH}"
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/.extraheader" \
+            GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${AUTH}"
+          git -c core.hooksPath=/dev/null push --atomic origin \
+            "HEAD:refs/heads/${GITHUB_REF_NAME}" ":refs/tags/v${VERSION}"
+          echo "::warning::Rolled back v${VERSION}. Nothing of it was published on Central, the version can be released again."
+
+  notify:
+    needs: [check, prepare, build, push, publish, images, github-release, rollback]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Compose the notification
+        id: notification
+        env:
+          REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+          PUSH: ${{ needs.push.result }}
+          PUBLISH: ${{ needs.publish.result }}
+          IMAGES: ${{ needs.images.result }}
+          GITHUB_RELEASE: ${{ needs.github-release.result }}
+          ROLLBACK: ${{ needs.rollback.result }}
+          DEPLOYMENT_ID: ${{ needs.publish.outputs.deployment-id }}
+          RELEASE_URL: ${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ needs.prepare.outputs.version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          FAILED=failed
+          if [[ " ${RESULTS} " == *" cancelled "* ]]; then
+            FAILED='was cancelled'
+          fi
+          if [ "$PUBLISH" = success ]; then
+            if [ "$GITHUB_RELEASE" = success ] && [ "$IMAGES" != failure ]; then
+              MESSAGE="✅ ${REPOSITORY} ${VERSION} released: ${RELEASE_URL}"
+            else
+              MESSAGE="⚠️ ${REPOSITORY} ${VERSION} released, but Docker images or GitHub release failed: ${RUN_URL}"
+            fi
+          elif [ "$PUSH" != success ]; then
+            MESSAGE="❌ Release of ${REPOSITORY} ${FAILED} before anything was pushed: ${RUN_URL}"
+          elif [ "$ROLLBACK" = success ]; then
+            MESSAGE="❌ Release ${VERSION} of ${REPOSITORY} ${FAILED} and was rolled back, nothing reached Central: ${RUN_URL}"
+          elif [ "$ROLLBACK" = skipped ] && [ -n "$DEPLOYMENT_ID" ]; then
+            MESSAGE="⚠️ Release ${VERSION} of ${REPOSITORY} ${FAILED} after the upload to Central, deployment ${DEPLOYMENT_ID} may still be published. Tag and commits stay, check the deployment first: ${RUN_URL}"
+          else
+            MESSAGE="❌ Release ${VERSION} of ${REPOSITORY} ${FAILED}, the rollback did not complete: ${RUN_URL}"
+          fi
+          echo "message=${MESSAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Notify Matrix
+        continue-on-error: true
+        uses: $/.github/actions/matrix-notify
+        with:
+          message: ${{ steps.notification.outputs.message }}
+          homeserver: ${{ vars.MATRIX_HOMESERVER }}
+          room-id: ${{ vars.MATRIX_ROOM_ID }}
+          token: ${{ secrets.MATRIX_ACCESS_TOKEN }}

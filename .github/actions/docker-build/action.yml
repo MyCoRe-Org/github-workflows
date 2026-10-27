@@ -1,0 +1,48 @@
+name: Docker Build
+description: Build Docker images without any credentials and save them to an archive, which docker-push pushes.
+
+inputs:
+  images:
+    description: One image per line as '<image> <context> [<dockerfile>]', dockerfile defaults to '<context>/Dockerfile'
+    required: true
+  working-directory:
+    description: Directory the contexts are relative to
+    required: false
+    default: '.'
+  archive:
+    description: Absolute path of the archive the images are saved to
+    required: true
+
+outputs:
+  has-images:
+    description: "'true' if images were built"
+    value: ${{ steps.build.outputs.has-images }}
+
+runs:
+  using: composite
+  steps:
+    # a caller with a switch for the images passes only empty lines when it is off
+    - id: build
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        IMAGES: ${{ inputs.images }}
+        ARCHIVE: ${{ inputs.archive }}
+      run: |
+        set -euo pipefail
+        # only a local tag, docker-push decides on the tags that are pushed
+        BUILT=()
+        while read -r image context dockerfile; do
+          [ -z "$image" ] && continue
+          echo "::group::${image}"
+          docker build "$context" --file "${dockerfile:-${context%/}/Dockerfile}" --tag "${image}:ci-build"
+          echo "::endgroup::"
+          BUILT+=("${image}:ci-build")
+        done <<< "$IMAGES"
+        if [ "${#BUILT[@]}" -eq 0 ]; then
+          echo "no images given, nothing to build"
+          exit 0
+        fi
+        mkdir -p "$(dirname "$ARCHIVE")"
+        docker save --output "$ARCHIVE" "${BUILT[@]}"
+        echo "has-images=true" >> "$GITHUB_OUTPUT"

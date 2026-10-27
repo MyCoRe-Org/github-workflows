@@ -1,0 +1,11 @@
+{
+  "name": "MyCoRe Node CI",
+  "description": "Installs with Yarn and runs lint and build.",
+  "categories": [
+    "JavaScript",
+    "TypeScript"
+  ],
+  "filePatterns": [
+    "package.json$"
+  ]
+}

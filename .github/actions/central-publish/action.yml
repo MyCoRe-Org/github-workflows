@@ -1,0 +1,93 @@
+name: Central Publish
+description: >-
+  Sign the files of a bundle of the central-publishing-maven-plugin and publish it on Sonatype Central.
+  Id and last state of the deployment are kept in $RUNNER_TEMP/central-deployment, also when a step fails.
+  If that directory already holds an id, e.g. of an earlier attempt, nothing is uploaded and the action waits for it.
+
+inputs:
+  bundle:
+    description: Path of the unsigned bundle
+    required: true
+  version:
+    description: Version every file of the bundle must have
+    required: true
+  group-id-prefix:
+    description: groupId every file must have, or start with followed by a dot, e.g. 'org.mycore'
+    required: true
+  deployment-name:
+    description: Name of the deployment on Central
+    required: true
+  username:
+    description: Username of the Central token
+    required: true
+  password:
+    description: Password of the Central token
+    required: true
+  gpg-private-key:
+    description: Armored private key that signs the files
+    required: true
+  gpg-passphrase:
+    description: Passphrase of the key, empty for a key without one
+    required: false
+    default: ''
+  wait-minutes:
+    description: Maximum minutes to wait for the validation by Central
+    required: false
+    default: '30'
+
+outputs:
+  deployment-id:
+    description: Id of the deployment on Central, empty if nothing was uploaded
+    value: ${{ steps.earlier.outputs.deployment-id || steps.upload.outputs.deployment-id }}
+  state:
+    description: Last state of the deployment Central reported, e.g. 'VALIDATED' or 'FAILED', empty if unknown
+    value: ${{ steps.wait.outputs.state }}
+
+runs:
+  using: composite
+  steps:
+    - name: Look for an earlier upload
+      id: earlier
+      shell: bash
+      run: |
+        FILE="${RUNNER_TEMP}/central-deployment/deployment-id"
+        if [ -s "$FILE" ]; then
+          echo "deployment-id=$(cat "$FILE")" >> "$GITHUB_OUTPUT"
+          echo "deployment $(cat "$FILE") was uploaded before, it is not uploaded again"
+        fi
+
+    - name: Sign the bundle
+      if: steps.earlier.outputs.deployment-id == ''
+      shell: bash
+      env:
+        BUNDLE: ${{ inputs.bundle }}
+        SIGNED_BUNDLE: ${{ runner.temp }}/central-bundle-signed.zip
+        VERSION: ${{ inputs.version }}
+        GROUP_ID_PREFIX: ${{ inputs.group-id-prefix }}
+        GPG_PRIVATE_KEY: ${{ inputs.gpg-private-key }}
+        GPG_PASSPHRASE: ${{ inputs.gpg-passphrase }}
+      run: |
+        "$GITHUB_ACTION_PATH/sign.sh"
+
+    - name: Upload the bundle
+      id: upload
+      if: steps.earlier.outputs.deployment-id == ''
+      shell: bash
+      env:
+        SIGNED_BUNDLE: ${{ runner.temp }}/central-bundle-signed.zip
+        DEPLOYMENT_NAME: ${{ inputs.deployment-name }}
+        CENTRAL_USERNAME: ${{ inputs.username }}
+        CENTRAL_PASSWORD: ${{ inputs.password }}
+      run: |
+        "$GITHUB_ACTION_PATH/upload.sh"
+
+    - name: Wait for the validation
+      id: wait
+      shell: bash
+      env:
+        DEPLOYMENT_ID: ${{ steps.earlier.outputs.deployment-id || steps.upload.outputs.deployment-id }}
+        CENTRAL_USERNAME: ${{ inputs.username }}
+        CENTRAL_PASSWORD: ${{ inputs.password }}
+        WAIT_MINUTES: ${{ inputs.wait-minutes }}
+      run: |
+        "$GITHUB_ACTION_PATH/wait.sh"

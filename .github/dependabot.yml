@@ -1,0 +1,25 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/*
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      # minor and patch updates of all actions in one pull request
+      github-actions:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
+      # every major update in a pull request of its own, across all directories
+      github-actions-major:
+        patterns:
+          - '*'
+        update-types:
+          - major
+        group-by: dependency-name

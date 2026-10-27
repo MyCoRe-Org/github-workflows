@@ -1,0 +1,28 @@
+name: POM Diff Check
+description: Fail unless a commit changes nothing but the values of given elements in pom.xml files.
+
+inputs:
+  from:
+    description: Commit to compare with
+    required: true
+  to:
+    description: Commit to check
+    required: true
+  name:
+    description: What the commit is, for the messages, e.g. 'the release commit'
+    required: true
+  allowed:
+    description: "One element per line as '<element>=<value>', a changed line must be '<element>value</element>' with that value, '*' allows every value. Lines with an empty element or value are ignored"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        FROM: ${{ inputs.from }}
+        TO: ${{ inputs.to }}
+        NAME: ${{ inputs.name }}
+        ALLOWED: ${{ inputs.allowed }}
+      run: |
+        "$GITHUB_ACTION_PATH/check.sh"

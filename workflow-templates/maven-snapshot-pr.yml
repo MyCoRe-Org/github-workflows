@@ -1,0 +1,28 @@
+name: Snapshot Deploy (PR)
+
+on:
+  pull_request:
+    types: [labeled, synchronize, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    concurrency:
+      group: snapshot-deploy-pr-${{ github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    # only pull requests with the label and a filled in snapshot.qualifier,
+    # deploy.name is the legacy key of the pull request templates of gbv/reposis_workflows
+    if: |
+      contains(github.event.pull_request.labels.*.name, 'snapshot-deploy') &&
+      (contains(github.event.pull_request.body, 'snapshot.qualifier:') ||
+        contains(github.event.pull_request.body, 'deploy.name:')) &&
+      !contains(github.event.pull_request.body, 'snapshot.qualifier: <required>') &&
+      !contains(github.event.pull_request.body, 'deploy.name: <required>')
+    uses: MyCoRe-Org/github-workflows/.github/workflows/maven-deploy-pr.yml@v1
+    with:
+      java-version: '25'
+    secrets:
+      MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
+      MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}

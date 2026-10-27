@@ -1,0 +1,41 @@
+name: Snapshot Upload
+description: >-
+  Upload the snapshots a build deployed into a directory to the snapshot repository of Central with
+  maven-deploy-plugin:deploy-file. Only components of the project in the checkout are uploaded, in their versions.
+  Expects a JDK and a Maven settings.xml with the server central.
+
+inputs:
+  staging:
+    description: Directory the build deployed into
+    required: true
+  project:
+    description: Checkout of the commit that was built, its poms name the components
+    required: false
+    default: '.'
+  version-qualifier:
+    description: Qualifier the build added to the versions, empty for none
+    required: false
+    default: ''
+  deploy-plugin-version:
+    description: Version of the maven-deploy-plugin, e.g. the one the parent of the project manages
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Check the snapshots
+      shell: bash
+      env:
+        STAGING: ${{ inputs.staging }}
+        PROJECT: ${{ inputs.project }}
+        QUALIFIER: ${{ inputs.version-qualifier }}
+        PLUGIN_VERSION: ${{ inputs.deploy-plugin-version }}
+        WORK: ${{ runner.temp }}/snapshot-upload
+      run: |
+        python3 "$GITHUB_ACTION_PATH/upload.py"
+
+    # outside the checkout, Maven would read .mvn of the project otherwise
+    - name: Upload the snapshots
+      shell: bash
+      working-directory: ${{ runner.temp }}/snapshot-upload
+      run: mvn --batch-mode --no-transfer-progress --file pom.xml validate

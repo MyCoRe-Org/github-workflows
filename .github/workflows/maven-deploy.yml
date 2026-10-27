@@ -1,0 +1,218 @@
+name: Maven Snapshot Deploy
+
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        type: string
+        required: true
+      skip-tests:
+        type: boolean
+        default: false
+      build-args:
+        type: string
+        default: ''
+      maven-opts:
+        type: string
+        default: ''
+      setup-browser:
+        type: boolean
+        default: false
+      project-setup:
+        type: boolean
+        default: false
+      docker-images:
+        type: string
+        default: ''
+      docker-date-tag:
+        type: boolean
+        default: false
+      version-qualifier:
+        type: string
+        default: ''
+      environment:
+        type: string
+        default: ''
+    secrets:
+      MAVEN_USERNAME:
+        required: true
+      MAVEN_PASSWORD:
+        required: true
+      DOCKERHUB_USERNAME:
+        required: false
+      DOCKERHUB_TOKEN:
+        required: false
+
+# Code of the project, the tests, Maven plugins and npm packages included, only runs in build, which gets no secret.
+# deploy and images run no code of the project and only upload what belongs to it.
+jobs:
+  # builds and tests the snapshot and deploys it into a directory instead of uploading it
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # for every Maven run, some projects pass it on to their integration tests
+    env:
+      MAVEN_OPTS: ${{ inputs.maven-opts }}
+    outputs:
+      deploy-plugin-version: ${{ steps.build.outputs.deploy-plugin-version }}
+      has-images: ${{ steps.images.outputs.has-images }}
+    steps:
+      - uses: $/.github/actions/maven-setup
+        with:
+          java-version: ${{ inputs.java-version }}
+          setup-browser: ${{ inputs.setup-browser }}
+          project-setup: ${{ inputs.project-setup }}
+
+      # 2026.06.1-SNAPSHOT with the qualifier test becomes 2026.06.1-test-SNAPSHOT
+      - name: Add the version qualifier
+        if: inputs.version-qualifier != ''
+        env:
+          QUALIFIER: ${{ inputs.version-qualifier }}
+          BUILD_ARGS: ${{ inputs.build-args }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$QUALIFIER" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::version-qualifier '${QUALIFIER}' may only contain letters, digits, '.', '_' and '-'"
+            exit 1
+          fi
+          # pinned, mycore-parent does not manage it and Dependabot does not see it.
+          # Maven writes its errors to stdout, they are printed if it fails
+          VERSION="$(mvn --batch-mode --no-transfer-progress -q -N \
+            org.apache.maven.plugins:maven-help-plugin:3.5.2:evaluate -Dexpression=project.version -DforceStdout)" \
+            || { echo "$VERSION"; exit 1; }
+          case "$VERSION" in
+            *-SNAPSHOT) ;;
+            *)
+              echo "::error::${VERSION} is not a snapshot, only snapshots get a qualifier"
+              exit 1
+              ;;
+          esac
+          QUALIFIED="${VERSION%-SNAPSHOT}-${QUALIFIER}-SNAPSHOT"
+          # with the arguments of the build, whose profiles may add modules
+          read -r -a ARGS <<< "$BUILD_ARGS"
+          mvn --batch-mode --no-transfer-progress versions:set -DnewVersion="$QUALIFIED" -DgenerateBackupPoms=false \
+            "${ARGS[@]}"
+          echo "Deploying ${QUALIFIED}"
+
+      # deploy-to-central of mycore-parent would upload, so the build deploys into a directory instead
+      - name: Build the snapshot
+        id: build
+        env:
+          SKIP_TESTS_FLAG: ${{ inputs.skip-tests && '-DskipTests' || '' }}
+          BUILD_ARGS: ${{ inputs.build-args }}
+        run: |
+          set -euo pipefail
+          # deploy uploads with the maven-deploy-plugin the parent manages and checks the version again,
+          # this only fails before the build
+          DEPLOY_PLUGIN="$(mvn --batch-mode --no-transfer-progress -q -N \
+            org.apache.maven.plugins:maven-help-plugin:3.5.2:evaluate -Dexpression=maven-deploy-plugin.version \
+            -DforceStdout || true)"
+          if [[ ! "$DEPLOY_PLUGIN" =~ ^3\.[1-9][0-9]*\.[0-9]+$ ]]; then
+            echo "::error::the parent manages no maven-deploy-plugin 3.1 or newer but '${DEPLOY_PLUGIN}', mycore-parent 57 or newer is required"
+            exit 1
+          fi
+          echo "deploy-plugin-version=${DEPLOY_PLUGIN}" >> "$GITHUB_OUTPUT"
+          read -r -a ARGS <<< "$BUILD_ARGS"
+          mvn --batch-mode --no-transfer-progress deploy -DskipDeployToCentral \
+            "-DaltDeploymentRepository=snapshot-staging::file://${RUNNER_TEMP}/snapshot-staging" \
+            ${SKIP_TESTS_FLAG:+"$SKIP_TESTS_FLAG"} "${ARGS[@]}"
+
+      # built here without credentials, the job images only pushes them
+      - name: Build the Docker images
+        id: images
+        uses: $/.github/actions/docker-build
+        with:
+          images: ${{ inputs.docker-images }}
+          archive: ${{ runner.temp }}/snapshot-images/images.tar
+
+      # overwrite, as a re-run of the whole workflow uploads them again
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: snapshot-staging
+          path: ${{ runner.temp }}/snapshot-staging
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+      - if: steps.images.outputs.has-images == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: snapshot-images
+          path: ${{ runner.temp }}/snapshot-images
+          retention-days: 1
+          overwrite: true
+
+  # uploads the snapshots of build that belong to the project
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    # empty runs without environment, an environment restricts the deploy to its deployment branches
+    # and provides its secrets
+    environment: ${{ inputs.environment }}
+    # Maven runs here with the Central token, a poisoned cache entry could replace the maven-deploy-plugin
+    cache-mode: none
+    permissions:
+      contents: read
+    steps:
+      # its poms name the components that may be uploaded, nothing of the checkout runs
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: 'temurin'
+          server-id: 'central'
+          server-username: MAVEN_USERNAME
+          server-password: MAVEN_PASSWORD
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: snapshot-staging
+          path: ${{ runner.temp }}/snapshot-staging
+
+      - uses: $/.github/actions/snapshot-upload
+        env:
+          MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
+        with:
+          staging: ${{ runner.temp }}/snapshot-staging
+          version-qualifier: ${{ inputs.version-qualifier }}
+          deploy-plugin-version: ${{ needs.build.outputs.deploy-plugin-version }}
+
+  # pushes the images of build once the snapshots are uploaded
+  images:
+    needs: [build, deploy]
+    if: needs.build.outputs.has-images == 'true'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    cache-mode: none
+    permissions: {}
+    steps:
+      - name: Determine the Docker tags
+        id: docker-tags
+        env:
+          DATE_TAG: ${{ inputs.docker-date-tag }}
+        run: |
+          # docker tags must not start with '.' or '-' and are limited to 128 characters, 11 are left for the date
+          REF="$(echo "$GITHUB_REF_NAME" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9._\n-' '-' | sed 's/^[.-]*//' | cut -c1-117)"
+          TAGS="$REF"
+          if [ "$DATE_TAG" = "true" ]; then
+            TAGS="$TAGS ${REF}-$(date +'%Y-%m-%d')"
+          fi
+          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: snapshot-images
+          path: ${{ runner.temp }}/snapshot-images
+
+      - uses: $/.github/actions/docker-push
+        with:
+          images: ${{ inputs.docker-images }}
+          tags: ${{ steps.docker-tags.outputs.tags }}
+          archive: ${{ runner.temp }}/snapshot-images/images.tar
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}

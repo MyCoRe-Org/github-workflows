@@ -1,0 +1,11 @@
+{
+  "name": "MyCoRe Snapshot Deploy of Pull Requests",
+  "description": "Deploys a pull request with the label snapshot-deploy as <version>-<snapshot.qualifier>-SNAPSHOT for testing.",
+  "categories": [
+    "Java",
+    "Maven"
+  ],
+  "filePatterns": [
+    "pom.xml$"
+  ]
+}

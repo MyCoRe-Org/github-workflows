@@ -1,0 +1,277 @@
+name: Maven Version Branch
+
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        type: string
+        required: true
+      branch:
+        type: string
+        required: true
+      development-version:
+        type: string
+        required: true
+      dependency-property:
+        type: string
+        default: 'mycore.version'
+      dependency-development-version:
+        type: string
+        default: ''
+      environment:
+        type: string
+        default: 'release'
+    secrets:
+      RELEASE_APP_PRIVATE_KEY:
+        required: false
+      MATRIX_ACCESS_TOKEN:
+        required: false
+
+jobs:
+  # runs Maven and its plugins without any secret, its result is a Git bundle that push checks
+  prepare:
+    runs-on: ubuntu-latest
+    # push only lets version changes pass, a poisoned cache entry cannot get more through
+    cache-mode: read
+    permissions:
+      contents: read
+    steps:
+      - uses: $/.github/actions/check-trigger
+        with:
+          workflow: maven-version-branch
+          dispatch-actor: ${{ vars.DISPATCH_ACTOR }}
+
+      - uses: $/.github/actions/maven-setup
+        with:
+          java-version: ${{ inputs.java-version }}
+          fetch-depth: '0'
+
+      - name: Configure Git author
+        env:
+          ACTOR: ${{ github.actor }}
+          ACTOR_ID: ${{ github.actor_id }}
+        run: |
+          git config user.name "$ACTOR"
+          # the noreply address with the id links the commits to the account, also after a rename
+          git config user.email "${ACTOR_ID}+${ACTOR}@users.noreply.github.com"
+
+      - name: Check the inputs
+        env:
+          BRANCH: ${{ inputs.branch }}
+          DEV_VERSION: ${{ inputs.development-version }}
+          DEPENDENCY_DEV_VERSION: ${{ inputs.dependency-development-version }}
+        run: |
+          set -euo pipefail
+          for value in "$BRANCH" "$DEV_VERSION" "$DEPENDENCY_DEV_VERSION"; do
+            if [[ "$value" =~ [[:space:]] ]]; then
+              echo "::error::'${value}' contains whitespace"
+              exit 1
+            fi
+          done
+          if ! git check-ref-format --branch "$BRANCH" > /dev/null 2>&1; then
+            echo "::error::'${BRANCH}' is not a valid branch name"
+            exit 1
+          fi
+          case "$DEV_VERSION" in
+            *-SNAPSHOT) ;;
+            *)
+              echo "::error::development-version '${DEV_VERSION}' must end with '-SNAPSHOT'"
+              exit 1
+              ;;
+          esac
+          # pinned, mycore-parent does not manage it and Dependabot does not see it.
+          # Maven writes its errors to stdout, they are printed if it fails
+          CURRENT="$(mvn --batch-mode --no-transfer-progress -q -N \
+            org.apache.maven.plugins:maven-help-plugin:3.5.2:evaluate -Dexpression=project.version -DforceStdout)" \
+            || { echo "$CURRENT"; exit 1; }
+          if [ "$DEV_VERSION" = "$CURRENT" ]; then
+            echo "::error::development-version '${DEV_VERSION}' is the current version, ${GITHUB_REF_NAME} and ${BRANCH} would deploy the same snapshot"
+            exit 1
+          fi
+
+      - name: Create the branch
+        env:
+          BRANCH: ${{ inputs.branch }}
+          DEV_VERSION: ${{ inputs.development-version }}
+        run: |
+          mvn --batch-mode --no-transfer-progress release:branch \
+            "-DbranchName=${BRANCH}" \
+            "-DdevelopmentVersion=${DEV_VERSION}" \
+            -DautoVersionSubmodules=true \
+            -DupdateBranchVersions=false \
+            -DupdateWorkingCopyVersions=true \
+            -DpushChanges=false
+
+      - name: Set the dependency version for the next development iteration
+        uses: $/.github/actions/maven-pom-pin
+        with:
+          property: ${{ inputs.dependency-property }}
+          value: ${{ inputs.dependency-development-version }}
+
+      - name: Fold the dependency version into the development commit
+        run: |
+          if ! git diff --quiet; then
+            git commit -a --amend --no-edit
+          fi
+
+      # refs/bundle/start is the starting branch afterwards, refs/bundle/branch the new branch
+      - name: Bundle the commits
+        env:
+          BRANCH: ${{ inputs.branch }}
+        run: |
+          set -euo pipefail
+          git update-ref refs/bundle/start HEAD
+          git update-ref refs/bundle/branch "refs/heads/${BRANCH}"
+          git bundle create "${RUNNER_TEMP}/version-branch.bundle" refs/bundle/start refs/bundle/branch "^${GITHUB_SHA}"
+
+      # overwrite, as a re-run of the whole workflow uploads it again
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: version-branch
+          path: ${{ runner.temp }}/version-branch.bundle
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  # runs no code of the project, it checks the bundle of prepare and pushes it
+  push:
+    needs: prepare
+    runs-on: ubuntu-latest
+    # must differ from the group of the caller, equal groups deadlock
+    concurrency:
+      group: maven-version-branch-job-${{ github.repository }}
+      cancel-in-progress: false
+    # holds the key of the GitHub App, its deployment branches decide which branches may be branched off
+    environment: ${{ inputs.environment }}
+    cache-mode: none
+    permissions:
+      contents: write
+    steps:
+      # here as well, a re-run of this job alone does not repeat the check of prepare
+      - uses: $/.github/actions/check-trigger
+        with:
+          workflow: maven-version-branch
+          dispatch-actor: ${{ vars.DISPATCH_ACTOR }}
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: version-branch
+          path: ${{ runner.temp }}/bundle
+
+      # the bundle comes from a job that ran Maven and its plugins, so it is checked before anything is pushed
+      - name: Check the bundle
+        id: bundle
+        run: |
+          set -euo pipefail
+          fail() { # fail <reason>
+            echo "::error::the bundle of prepare is refused, $1"
+            exit 1
+          }
+          BUNDLE="${RUNNER_TEMP}/bundle/version-branch.bundle"
+          git bundle verify --quiet "$BUNDLE" > /dev/null 2>&1 || fail "it does not build on ${GITHUB_SHA}"
+          git fetch --quiet --no-tags "$BUNDLE" 'refs/bundle/*:refs/bundle/*'
+          START="$(git rev-parse --verify 'refs/bundle/start^{commit}')"
+          NEW="$(git rev-parse --verify 'refs/bundle/branch^{commit}')"
+
+          # release:branch commits the start of the new branch, then the development commit on top of it
+          [ -z "$(git rev-list --no-walk --min-parents=2 "$NEW" "$START")" ] || fail "it contains a merge commit"
+          [ "$(git rev-parse "${NEW}^")" = "$GITHUB_SHA" ] || fail "the new branch does not start right after ${GITHUB_SHA}"
+          [ "$(git rev-parse "${START}^")" = "$NEW" ] || fail "${GITHUB_REF_NAME} does not continue with one commit after the new branch"
+          {
+            echo "start-sha=${START}"
+            echo "branch-sha=${NEW}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check the commit of the new branch
+        uses: $/.github/actions/pom-diff-check
+        with:
+          from: ${{ github.sha }}
+          to: ${{ steps.bundle.outputs.branch-sha }}
+          name: the commit of the new branch
+          allowed: |
+            tag=${{ inputs.branch }}
+            project.build.outputTimestamp=*
+
+      - name: Check the development commit
+        uses: $/.github/actions/pom-diff-check
+        with:
+          from: ${{ github.sha }}
+          to: ${{ steps.bundle.outputs.start-sha }}
+          name: the development commit
+          allowed: |
+            version=${{ inputs.development-version }}
+            ${{ inputs.dependency-property }}=${{ inputs.dependency-development-version }}
+            project.build.outputTimestamp=*
+
+      # valid for one hour and for this repository only, so it is created right before the push
+      - name: Create the push token
+        id: push-token
+        if: vars.RELEASE_APP_CLIENT_ID != ''
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Push the branch and the development version
+        env:
+          BRANCH: ${{ inputs.branch }}
+          TOKEN: ${{ steps.push-token.outputs.token || github.token }}
+        run: |
+          set -euo pipefail
+          AUTH="$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+          echo "::add-mask::${AUTH}"
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/.extraheader" \
+            GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${AUTH}"
+          STATUS=0
+          git ls-remote --exit-code origin "refs/heads/${BRANCH}" > /dev/null || STATUS=$?
+          case "$STATUS" in
+            0)
+              echo "::error::the branch ${BRANCH} exists already"
+              exit 1
+              ;;
+            2) ;;
+            *)
+              echo "::error::cannot check whether the branch ${BRANCH} exists"
+              exit 1
+              ;;
+          esac
+          # the checkout of this job has no hooks, they stay off all the same
+          git -c core.hooksPath=/dev/null push --atomic origin \
+            "refs/bundle/start:refs/heads/${GITHUB_REF_NAME}" "refs/bundle/branch:refs/heads/${BRANCH}"
+
+  notify:
+    needs: [prepare, push]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Compose the notification
+        id: notification
+        env:
+          REPOSITORY: ${{ github.repository }}
+          BRANCH: ${{ inputs.branch }}
+          DEV_VERSION: ${{ inputs.development-version }}
+          RESULT: ${{ needs.push.result }}
+          BRANCH_URL: ${{ github.server_url }}/${{ github.repository }}/tree/${{ inputs.branch }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "$RESULT" = success ]; then
+            MESSAGE="✅ ${REPOSITORY}: branch ${BRANCH} created, ${GITHUB_REF_NAME} is now ${DEV_VERSION}: ${BRANCH_URL}"
+          else
+            MESSAGE="❌ Creating the branch ${BRANCH} in ${REPOSITORY} failed: ${RUN_URL}"
+          fi
+          echo "message=${MESSAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Notify Matrix
+        continue-on-error: true
+        uses: $/.github/actions/matrix-notify
+        with:
+          message: ${{ steps.notification.outputs.message }}
+          homeserver: ${{ vars.MATRIX_HOMESERVER }}
+          room-id: ${{ vars.MATRIX_ROOM_ID }}
+          token: ${{ secrets.MATRIX_ACCESS_TOKEN }}

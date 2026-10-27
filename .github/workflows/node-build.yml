@@ -1,0 +1,31 @@
+name: Node Build
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        required: true
+      scripts:
+        type: string
+        default: 'lint build'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: $/.github/actions/node-setup
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Run scripts
+        env:
+          SCRIPTS: ${{ inputs.scripts }}
+        run: |
+          for script in $SCRIPTS; do
+            echo "::group::yarn run $script"
+            yarn run "$script"
+            echo "::endgroup::"
+          done

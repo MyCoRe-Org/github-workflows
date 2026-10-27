@@ -1,0 +1,54 @@
+name: Docker Push
+description: Push the images docker-build saved to an archive with several tags to Docker Hub, only the given images.
+
+inputs:
+  images:
+    description: The images as given to docker-build, one per line, the first word of each line is the image
+    required: true
+  tags:
+    description: Tags to push every image with, separated by whitespace
+    required: true
+  archive:
+    description: Path of the archive of docker-build
+    required: true
+  username:
+    description: Docker Hub username
+    required: true
+  password:
+    description: Docker Hub token
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Load the images
+      shell: bash
+      env:
+        ARCHIVE: ${{ inputs.archive }}
+      run: docker load --quiet --input "$ARCHIVE"
+
+    - name: Login to Docker Hub
+      uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      with:
+        username: ${{ inputs.username }}
+        password: ${{ inputs.password }}
+
+    # the archive comes from a job that ran the build, so only the given images are pushed, with the given tags
+    - name: Push the images
+      shell: bash
+      env:
+        IMAGES: ${{ inputs.images }}
+        TAGS: ${{ inputs.tags }}
+      run: |
+        set -euo pipefail
+        while read -r image _; do
+          [ -z "$image" ] && continue
+          if ! docker image inspect "${image}:ci-build" > /dev/null 2>&1; then
+            echo "::error::the archive holds no image ${image}"
+            exit 1
+          fi
+          for tag in $TAGS; do
+            docker tag "${image}:ci-build" "${image}:${tag}"
+            docker push "${image}:${tag}"
+          done
+        done <<< "$IMAGES"

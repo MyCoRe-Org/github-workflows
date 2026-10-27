@@ -1,0 +1,43 @@
+name: Matrix Notify
+description: Send a message to a Matrix room, skipped when the Matrix settings are empty.
+
+inputs:
+  message:
+    description: Message text, URLs are shown as links by most clients
+    required: true
+  homeserver:
+    description: Base URL of the homeserver (e.g. 'https://matrix.org'), empty to skip
+    required: false
+    default: ''
+  room-id:
+    description: Internal id of the room (e.g. '!AbCdEf:matrix.org'), empty to skip
+    required: false
+    default: ''
+  token:
+    description: Access token of the sending account, empty to skip
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        MESSAGE: ${{ inputs.message }}
+        HOMESERVER: ${{ inputs.homeserver }}
+        ROOM_ID: ${{ inputs.room-id }}
+        TOKEN: ${{ inputs.token }}
+      run: |
+        if [ -z "$HOMESERVER" ] || [ -z "$ROOM_ID" ] || [ -z "$TOKEN" ]; then
+          echo "Matrix is not configured, no message sent"
+          exit 0
+        fi
+        ROOM="$(jq -rn --arg room "$ROOM_ID" '$room | @uri')"
+        TXN="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$(date +%s%N)"
+        jq -n --arg body "$MESSAGE" '{msgtype: "m.notice", body: $body}' \
+          | curl -sS --fail-with-body --connect-timeout 10 --max-time 30 -X PUT \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H 'Content-Type: application/json' \
+            --data @- \
+            "${HOMESERVER%/}/_matrix/client/v3/rooms/${ROOM}/send/m.room.message/${TXN}"
+        echo

@@ -1,0 +1,11 @@
+{
+  "name": "MyCoRe Node Release",
+  "description": "Publishes the package with npm trusted publishing and creates a GitHub release for version tags.",
+  "categories": [
+    "JavaScript",
+    "TypeScript"
+  ],
+  "filePatterns": [
+    "package.json$"
+  ]
+}

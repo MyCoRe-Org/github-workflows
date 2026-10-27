@@ -1,0 +1,31 @@
+name: Check Trigger
+description: Fail unless the run is on a branch and was neither started nor re-run by the account of DISPATCH_TOKEN.
+
+inputs:
+  workflow:
+    description: Name of the workflow for the messages, e.g. 'maven-release'
+    required: true
+  dispatch-actor:
+    description: Login of the account of DISPATCH_TOKEN, usually vars.DISPATCH_ACTOR, empty to skip that check
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        WORKFLOW: ${{ inputs.workflow }}
+        DISPATCH_ACTOR: ${{ inputs.dispatch-actor }}
+      run: |
+        if [ "$GITHUB_REF_TYPE" != branch ]; then
+          echo "::error::${WORKFLOW} must run on a branch, not on ${GITHUB_REF}"
+          exit 1
+        fi
+        # DISPATCH_TOKEN may start every workflow of its targets, these workflows are started by a person
+        for actor in "$GITHUB_ACTOR" "$GITHUB_TRIGGERING_ACTOR"; do
+          if [ -n "$DISPATCH_ACTOR" ] && [ "${actor,,}" = "${DISPATCH_ACTOR,,}" ]; then
+            echo "::error::${actor} is the account of DISPATCH_TOKEN, ${WORKFLOW} must be started by a person"
+            exit 1
+          fi
+        done
