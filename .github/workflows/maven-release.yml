@@ -30,10 +30,10 @@ on:
       build-args:
         type: string
         default: '-Prelease-profile -DskipTests'
-      # pinned, Dependabot does not see it
+      # empty for the default in the env of the workflow
       central-publishing-version:
         type: string
-        default: '0.12.0'
+        default: ''
       maven-opts:
         type: string
         default: ''
@@ -84,6 +84,10 @@ on:
       MATRIX_ACCESS_TOKEN:
         required: false
 
+# pinned, Dependabot does not see it. An empty input stands for it, as in maven-deploy.yml
+env:
+  CENTRAL_PUBLISHING_VERSION: ${{ inputs.central-publishing-version || '0.12.0' }}
+
 # Code of the project, the tests, Maven plugins and npm packages included, only runs in prepare and build, which get
 # no secret. The jobs with secrets run no code of the project and check what they get from these two.
 jobs:
@@ -109,7 +113,6 @@ jobs:
           DEPENDENCY_ARTIFACT: ${{ inputs.dependency-artifact }}
           RELEASE_VERSION: ${{ inputs.release-version }}
           DEV_VERSION: ${{ inputs.development-version }}
-          CENTRAL_PUBLISHING_VERSION: ${{ inputs.central-publishing-version }}
         run: |
           set -euo pipefail
           if [ -z "$ENVIRONMENT" ]; then
@@ -352,7 +355,6 @@ jobs:
       - name: Build the release
         env:
           BUILD_ARGS: ${{ inputs.build-args }}
-          CENTRAL_PUBLISHING_VERSION: ${{ inputs.central-publishing-version }}
         run: |
           set -euo pipefail
           read -r -a ARGS <<< "$BUILD_ARGS"

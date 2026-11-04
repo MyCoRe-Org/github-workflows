@@ -28,10 +28,10 @@ on:
       build-args:
         type: string
         default: ''
-      # pinned, Dependabot does not see it
+      # empty for the default of maven-deploy.yml
       central-publishing-version:
         type: string
-        default: '0.12.0'
+        default: ''
       maven-opts:
         type: string
         default: ''

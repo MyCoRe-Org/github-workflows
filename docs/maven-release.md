@@ -67,7 +67,8 @@ Other project specific steps run in the caller after the release, using the `ver
   `deploy-to-central` creates the bundle for Central. The parents bring the `central-publishing-maven-plugin` 0.7.0
   to 0.10.0 in the property `central-publishing-maven-plugin.version`. The build sets it to the input
   `central-publishing-version`, 0.12.0 or newer, the first version that creates the bundle without uploading it
-  (`-DskipUpload=true`).
+  (`-DskipUpload=true`). No profile of the project may declare that plugin with a version of its own, like the old
+  `deploy-to-sonatype` profiles of some plugins, see [`maven-deploy.yml`](maven-deploy.md#requirements).
 - An own `<scm>` section in the root `pom.xml` with `connection`, `developerConnection` and `url` of the repository.
   An inherited one points to the repository of the parent.
 - The [environment `release`](../README.md#the-environment-release) with the Central token and the signing key.
@@ -87,7 +88,7 @@ Other project specific steps run in the caller after the release, using the `ver
 | `dependency-artifact`            | no              |                                              | `groupId:artifactId` checked on Maven Central for `dependency-version` before the release starts, e.g. `org.mycore:mycore-base` |
 | `prepare-args`                   | no              |                                              | Arguments passed to the build of `release:prepare`, e.g. profiles or `-DskipTests`                                              |
 | `build-args`                     | no              | `-Prelease-profile -DskipTests`              | Arguments of the build of the tag, which creates the bundle for Central, see [Examples](#examples)                              |
-| `central-publishing-version`     | no              | `0.12.0`                                     | Version of the `central-publishing-maven-plugin` that creates the bundle, 0.12.0 or newer                                       |
+| `central-publishing-version`     | no              | `0.12.0`                                     | Version of the `central-publishing-maven-plugin` that creates the bundle, 0.12.0 or newer, empty for the default                |
 | `maven-opts`                     | no              |                                              | `MAVEN_OPTS` of prepare and build, e.g. `-Xss128M`                                                                              |
 | `group-id-prefix`                | no              | `org.mycore`                                 | groupId every published file must have, or start with followed by a dot                                                         |
 | `release-notes-file`             | no              |                                              | File in the repository appended to the release notes, `@VERSION@` is replaced                                                   |

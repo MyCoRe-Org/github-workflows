@@ -48,6 +48,11 @@ The profile `deploy-to-central` of the parent stages them with the `central-publ
 version the parent manages. Up to version 56 the parent deploys to OSSRH, which is shut down. Without the property
 `maven-deploy-plugin.version` of the parent the run fails before the build.
 
+No profile of the project may declare the `central-publishing-maven-plugin` with a version of its own, like the old
+`deploy-to-sonatype` profiles of some plugins. Activated, e.g. with `-P deploy-to-sonatype` in `build-args`, its version
+wins over `central-publishing-version`, knows no `skipUpload` and lets the build fail with an upload it has no
+credentials for. Remove such profiles when switching to this workflow.
+
 ## Inputs
 
 | Input                        | Required | Default  | Description                                                                                                                  |
@@ -55,7 +60,7 @@ version the parent manages. Up to version 56 the parent deploys to OSSRH, which 
 | `java-version`               | yes      |          | Java version, e.g. `'25'`                                                                                                    |
 | `skip-tests`                 | no       | `false`  | Deploy without running the tests again                                                                                       |
 | `build-args`                 | no       |          | Arguments of the build, e.g. `-Dtomcat`, see [Examples](#examples)                                                           |
-| `central-publishing-version` | no       | `0.12.0` | Version of the `central-publishing-maven-plugin` that stages the snapshots, 0.12.0 or newer                                  |
+| `central-publishing-version` | no       | `0.12.0` | Version of the `central-publishing-maven-plugin` that stages the snapshots, 0.12.0 or newer, empty for the default           |
 | `maven-opts`                 | no       |          | `MAVEN_OPTS` of the build, e.g. `-Xss128M`                                                                                   |
 | `setup-browser`              | no       | `false`  | See [`maven-build.yml`](maven-build.md)                                                                                      |
 | `project-setup`              | no       | `false`  | See [`maven-build.yml`](maven-build.md#project-setup)                                                                        |

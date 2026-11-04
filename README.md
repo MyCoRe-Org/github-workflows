@@ -181,7 +181,7 @@ Third-party actions are pinned to commit SHAs and updated by Dependabot. Minor a
 pull request, every major update in a pull request of its own, as it needs a look at the release notes.
 Tools the workflows call directly are pinned by hand, Dependabot does not see them: actionlint and zizmor in
 [`lint.yml`](docs/lint.md), Corepack in `node-setup`, `maven-help-plugin` in the Maven workflows and the default of
-`central-publishing-version` in `maven-deploy.yml`, `maven-deploy-pr.yml` and `maven-release.yml`.
+`central-publishing-version` in `maven-deploy.yml` and `maven-release.yml`.
 
 ## License
 

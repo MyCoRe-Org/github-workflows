@@ -69,7 +69,7 @@ the `if` above before its pull request template switches to `snapshot.qualifier`
 | `payload`                    | no       | description of the pull request | Text containing the line `snapshot.qualifier: <qualifier>`                              |
 | `skip-tests`                 | no       | `false`                         | See [`maven-deploy.yml`](maven-deploy.md)                                               |
 | `build-args`                 | no       |                                 | See [`maven-deploy.yml`](maven-deploy.md)                                               |
-| `central-publishing-version` | no       | `0.12.0`                        | See [`maven-deploy.yml`](maven-deploy.md)                                               |
+| `central-publishing-version` | no       | that of `maven-deploy.yml`      | See [`maven-deploy.yml`](maven-deploy.md)                                               |
 | `maven-opts`                 | no       |                                 | See [`maven-deploy.yml`](maven-deploy.md)                                               |
 | `setup-browser`              | no       | `false`                         | See [`maven-build.yml`](maven-build.md)                                                 |
 | `project-setup`              | no       | `false`                         | See [`maven-build.yml`](maven-build.md#project-setup)                                   |

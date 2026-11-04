@@ -39,7 +39,16 @@ jobs:
             exit 1
           fi
           # GITHUB_TOKEN only covers the repository of the run, so there is no input for another one
-          RESPONSE="$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${ACTOR}/permission")"
+          ERRORS="$(mktemp)"
+          trap 'rm -f "$ERRORS"' EXIT
+          if ! RESPONSE="$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${ACTOR}/permission" 2> "$ERRORS")"; then
+            if grep -q 'HTTP 404' "$ERRORS"; then
+              echo "::error::GitHub returns no permission of ${ACTOR} in ${GITHUB_REPOSITORY} (HTTP 404), '${REQUIRED}' is required"
+            else
+              echo "::error::cannot read the permission of ${ACTOR} in ${GITHUB_REPOSITORY}: $(tail -n 1 "$ERRORS")"
+            fi
+            exit 1
+          fi
           # 'permission' maps maintain to write and triage to read, 'role_name' is exact
           # but may name a custom role, which falls back to its base permission
           ROLE="$(jq -r '.role_name // empty' <<< "$RESPONSE")"
