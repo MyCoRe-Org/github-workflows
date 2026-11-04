@@ -1,0 +1,28 @@
+name: Central Bundle Check
+description: >-
+  Fail unless every file of a bundle for Central belongs to a component of group-id-prefix in the given version and is
+  not signed yet, and every component has its pom and every file its md5 and sha1, without links and unreadable
+  entries. Reads the entries but extracts nothing and needs no secret, so a release can check the bundle before it
+  pushes anything.
+
+inputs:
+  bundle:
+    description: Path of the unsigned bundle
+    required: true
+  version:
+    description: Version every file of the bundle must have
+    required: true
+  group-id-prefix:
+    description: groupId every file must have, or start with followed by a dot, e.g. 'org.mycore'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        BUNDLE: ${{ inputs.bundle }}
+        VERSION: ${{ inputs.version }}
+        GROUP_ID_PREFIX: ${{ inputs.group-id-prefix }}
+      run: |
+        python3 -I "$GITHUB_ACTION_PATH/check.py"

@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Checks the snapshots a build deployed into STAGING and writes WORK/pom.xml, which uploads them to SNAPSHOT_URL.
+"""Checks the snapshots the central-publishing-maven-plugin staged in STAGING and writes WORK/pom.xml, which
+uploads them to SNAPSHOT_URL.
 
-Only components of the project in PROJECT are allowed, the project and its modules, also those of profiles, each in
-the version of its pom with QUALIFIER added. The pom of WORK runs maven-deploy-plugin:deploy-file in PLUGIN_VERSION for
-every component, with the coordinates of its pom in PROJECT, so the repository keeps its snapshot metadata. No pom of
-the project is run, they are only read."""
+STAGING is the directory central-deferred the plugin leaves with skipUpload, a repository whose files carry the snapshot
+version without timestamp, described by the metadata maven-metadata-central-staging.xml. Only components of the project
+in PROJECT are allowed, the project and its modules, also those of profiles, each in the version of its pom with
+QUALIFIER added. The pom of WORK runs maven-deploy-plugin:deploy-file in PLUGIN_VERSION for every component, with the
+coordinates of its pom in PROJECT, so the repository keeps its snapshot metadata. No pom of the project is run, they
+are only read."""
 import os
 import re
 import sys
@@ -14,6 +17,11 @@ from xml.sax.saxutils import escape
 
 POM = "{http://maven.apache.org/POM/4.0.0}"
 NAME = re.compile(r"^[A-Za-z0-9._-]+$")
+# metadata of the staging repository of the plugin
+METADATA = "maven-metadata-central-staging.xml"
+# list of the staged files the plugin writes beside them, the metadata names the same files. upload-artifact leaves
+# hidden files out, so it only shows up when the directory is passed on otherwise
+INDEX = ".index"
 
 
 def fail(message):
@@ -94,14 +102,14 @@ def main():
         relative = path.relative_to(staging).as_posix()
         if path.is_symlink() or not (path.is_file() or path.is_dir()):
             fail(f"the staging directory contains the link or special file {relative}")
-        if path.is_dir():
+        if path.is_dir() or relative == INDEX:
             continue
         owners = [c for c in expected if relative.startswith(layout(c) + "/")]
         if not owners:
             fail(f"{relative} belongs to no component of the project, only those are uploaded")
         owner = max(owners, key=lambda c: len(layout(c)))
         rest = relative[len(layout(owner)) + 1:].split("/")
-        if len(rest) == 1 and rest[0].startswith("maven-metadata.xml"):
+        if len(rest) == 1 and rest[0].startswith(METADATA):
             continue
         if len(rest) != 2 or rest[0] != expected[owner]:
             fail(f"{relative} is not in the version {expected[owner]} of {owner}")
@@ -112,13 +120,12 @@ def main():
         group, artifact = owner.split(":")
         version = expected[owner]
         directory = staging / layout(owner) / version
-        if "maven-metadata.xml" not in files:
+        if METADATA not in files:
             fail(f"{owner}:{version} has no snapshot metadata")
-        base = re.escape(version[:-len("-SNAPSHOT")])
         pom, plain, attached, used = None, [], [], set()
-        for classifier, extension, value in snapshot_versions(directory / "maven-metadata.xml"):
-            if not re.fullmatch(rf"{base}-[0-9]{{8}}\.[0-9]{{6}}-[0-9]+", value) or not NAME.fullmatch(extension) \
-                    or (classifier and not NAME.fullmatch(classifier)):
+        # the files carry the version itself, deploy-file gives them a timestamp in the repository
+        for classifier, extension, value in snapshot_versions(directory / METADATA):
+            if value != version or not NAME.fullmatch(extension) or (classifier and not NAME.fullmatch(classifier)):
                 fail(f"the snapshot metadata of {owner}:{version} names '{classifier}' '{extension}' '{value}'")
             name = f"{artifact}-{value}{'-' + classifier if classifier else ''}.{extension}"
             if name not in files or name in used:
@@ -136,7 +143,7 @@ def main():
         if main is None:
             attached = plain + attached
         unknown = [f for f in files if f not in used and not re.search(r"(\.md5|\.sha1|\.sha256|\.sha512)$", f)
-                   and not f.startswith("maven-metadata.xml")]
+                   and not f.startswith(METADATA)]
         if pom is None or unknown:
             fail(f"{owner}:{version} has no pom or unknown files: {', '.join(unknown)}")
         # without the coordinates, deploy-file would take them from the pom of the build
@@ -150,7 +157,7 @@ def main():
         executions.append((owner, version, configuration))
 
     if not executions:
-        fail("the build deployed nothing")
+        fail("the build staged nothing")
     work.mkdir(parents=True, exist_ok=True)
     blocks = []
     for number, (owner, version, configuration) in enumerate(executions, 1):

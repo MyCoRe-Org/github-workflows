@@ -30,6 +30,10 @@ on:
       build-args:
         type: string
         default: '-Prelease-profile -DskipTests'
+      # pinned, Dependabot does not see it
+      central-publishing-version:
+        type: string
+        default: '0.12.0'
       maven-opts:
         type: string
         default: ''
@@ -105,6 +109,7 @@ jobs:
           DEPENDENCY_ARTIFACT: ${{ inputs.dependency-artifact }}
           RELEASE_VERSION: ${{ inputs.release-version }}
           DEV_VERSION: ${{ inputs.development-version }}
+          CENTRAL_PUBLISHING_VERSION: ${{ inputs.central-publishing-version }}
         run: |
           set -euo pipefail
           if [ -z "$ENVIRONMENT" ]; then
@@ -123,6 +128,12 @@ jobs:
               exit 1
               ;;
           esac
+          # build needs skipUpload, which the central-publishing-maven-plugin has from 0.12.0 on
+          if [[ ! "$CENTRAL_PUBLISHING_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            || [ "$(printf '%s\n' 0.12.0 "$CENTRAL_PUBLISHING_VERSION" | sort -V | head -n 1)" != 0.12.0 ]; then
+            echo "::error::central-publishing-version '${CENTRAL_PUBLISHING_VERSION}' is no version 0.12.0 or newer, older ones have no skipUpload"
+            exit 1
+          fi
           if [ -n "$DEPENDENCY_ARTIFACT" ] && [ -z "$DEPENDENCY_VERSION" ]; then
             echo "::error::dependency-version is required when dependency-artifact '${DEPENDENCY_ARTIFACT}' is set"
             exit 1
@@ -332,25 +343,34 @@ jobs:
           git fetch --quiet --no-tags "${RUNNER_TEMP}/bundle/release.bundle" 'refs/bundle/*:refs/bundle/*'
           git checkout --quiet --detach refs/bundle/tag
 
-      # deploy-to-central of mycore-parent would upload, so the build deploys into a directory instead. That works
-      # with every parent since 57, whichever version of the central-publishing-maven-plugin it brings. From 0.12.0
-      # on, the plugin could create the bundle itself with -DskipUpload=true, but the parents of the branches since
-      # 2023 bring 0.7.0 to 0.10.0
+      # deploy-to-central of mycore-parent creates the bundle, -DskipUpload=true keeps it in target/central-publishing
+      # instead of uploading it. The parents since 57 bring the central-publishing-maven-plugin 0.7.0 to 0.10.0 in the
+      # property central-publishing-maven-plugin.version, -D sets it to central-publishing-version (MAVEN_OPTS would
+      # not), which check allows from 0.12.0 on, the first version with skipUpload (needs Maven 3.9.2). As in every
+      # release with the plugin, modules with maven.deploy.skip are part of the bundle (e.g. mir-it up to 2025.06.x),
+      # only skipPublishing leaves a module out
       - name: Build the release
         env:
           BUILD_ARGS: ${{ inputs.build-args }}
+          CENTRAL_PUBLISHING_VERSION: ${{ inputs.central-publishing-version }}
         run: |
           set -euo pipefail
           read -r -a ARGS <<< "$BUILD_ARGS"
-          STAGING="${RUNNER_TEMP}/release-staging"
-          mvn --batch-mode --no-transfer-progress deploy -DskipDeployToCentral \
-            "-DaltDeploymentRepository=release-staging::file://${STAGING}" "${ARGS[@]}"
-          if [ -z "$(find "$STAGING" -type f -name '*.pom' -print -quit 2> /dev/null)" ]; then
-            echo "::error::the build deployed nothing to ${STAGING}"
+          # the last -D wins, so build-args cannot change the checked version or turn the upload on
+          mvn --batch-mode --no-transfer-progress deploy "${ARGS[@]}" \
+            "-Dcentral-publishing-maven-plugin.version=${CENTRAL_PUBLISHING_VERSION}" -DskipUpload=true
+          # in the build directory of the first project with the plugin, usually the root
+          mapfile -t BUNDLES < <(find . -name node_modules -prune -o -type f \
+            -path '*/target/central-publishing/central-bundle.zip' -print)
+          if [ "${#BUNDLES[@]}" -ne 1 ]; then
+            echo "::error::the build created ${#BUNDLES[@]} bundles instead of one, deploy-to-central of mycore-parent 57 or newer creates it"
             exit 1
           fi
-          # the files of the components, Central creates the metadata itself
-          (cd "$STAGING" && zip -q -r -X "${RUNNER_TEMP}/central-bundle.zip" . -x '*/maven-metadata.xml*')
+          mv "${BUNDLES[0]}" "${RUNNER_TEMP}/central-bundle.zip"
+          # the work directories of the plugin hold a copy of every file, the release assets and the Docker build
+          # would see them otherwise
+          WORK_DIR="$(dirname "$(dirname "${BUNDLES[0]}")")"
+          rm -rf "${WORK_DIR}/central-staging" "${WORK_DIR}/central-publishing" "${WORK_DIR}/central-deferred"
 
       - name: Collect the release assets
         id: assets
@@ -515,6 +535,19 @@ jobs:
             tag=HEAD
             ${{ inputs.dependency-property }}=${{ inputs.dependency-development-version }}
             project.build.outputTimestamp=*
+
+      # publish signs the bundle of build after the push, a file it would refuse fails the release before
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: central-bundle
+          path: ${{ runner.temp }}/central
+
+      - name: Check the bundle for Central
+        uses: $/.github/actions/central-bundle-check
+        with:
+          bundle: ${{ runner.temp }}/central/central-bundle.zip
+          version: ${{ needs.prepare.outputs.version }}
+          group-id-prefix: ${{ inputs.group-id-prefix }}
 
       # valid for one hour and for this repository only, so it is created right before the push
       - name: Create the push token

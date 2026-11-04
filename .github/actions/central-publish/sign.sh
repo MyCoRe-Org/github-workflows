@@ -9,23 +9,8 @@ fail() {
   exit 1
 }
 
-# <group path>/<artifactId>/<version>/<artifactId>-<version>[-<classifier>].<extension>, checked before extracting
-PREFIX="${GROUP_ID_PREFIX//.//}/"
-ENTRIES="$(unzip -Z1 "$BUNDLE" 2> /dev/null)" || fail "the bundle is empty or no zip file"
-COUNT=0
-while IFS= read -r entry; do
-  [[ "$entry" == */ ]] && continue
-  dir="${entry%/*}"
-  file="${entry##*/}"
-  artifact="${dir%/*}"
-  artifact="${artifact##*/}"
-  if [[ "$entry" != "$PREFIX"* ]] || [[ "/${entry}/" == */../* ]] || [ "${dir##*/}" != "$VERSION" ] \
-    || [[ "$file" != "${artifact}-${VERSION}."* && "$file" != "${artifact}-${VERSION}-"* ]] || [[ "$file" == *.asc* ]]; then
-    fail "the bundle contains ${entry}, only unsigned files of ${GROUP_ID_PREFIX} in version ${VERSION} are published"
-  fi
-  COUNT=$((COUNT + 1))
-done <<< "$ENTRIES"
-[ "$COUNT" -gt 0 ] || fail "the bundle is empty"
+# the entries are checked before extracting, with the check push runs before anything is pushed
+python3 -I "$(dirname "${BASH_SOURCE[0]}")/../central-bundle-check/check.py"
 
 WORK="$(mktemp -d)"
 GNUPGHOME="$(mktemp -d)"

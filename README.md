@@ -42,20 +42,21 @@ the workflows of the released version, and are copied there whenever `v1` moves,
 
 The workflows are built from these composite actions.
 
-| Action                                                              | Purpose                                                                               |
-|---------------------------------------------------------------------|---------------------------------------------------------------------------------------|
-| [`maven-setup`](.github/actions/maven-setup/action.yml)             | Checkout, JDK with Maven cache, without any credentials                               |
-| [`node-setup`](.github/actions/node-setup/action.yml)               | Checkout, Node.js, Corepack and `yarn install`                                        |
-| [`maven-pom-pin`](.github/actions/maven-pom-pin/action.yml)         | Set a version property and the scm url in a `pom.xml`, return the previous values     |
-| [`docker-build`](.github/actions/docker-build/action.yml)           | Build images without credentials and save them to an archive                          |
-| [`docker-push`](.github/actions/docker-push/action.yml)             | Load the images of `docker-build`, tag them and push them to Docker Hub               |
-| [`github-release`](.github/actions/github-release/action.yml)       | Create a GitHub release with generated notes, a notes file and assets                 |
-| [`workflow-dispatch`](.github/actions/workflow-dispatch/action.yml) | Dispatch workflows in other repositories, optionally wait for their results           |
-| [`matrix-notify`](.github/actions/matrix-notify/action.yml)         | Send a message to a Matrix room                                                       |
-| [`check-trigger`](.github/actions/check-trigger/action.yml)         | Fail unless the run is on a branch and not started by the account of `DISPATCH_TOKEN` |
-| [`pom-diff-check`](.github/actions/pom-diff-check/action.yml)       | Fail unless a commit changes nothing but given values in `pom.xml` files              |
-| [`central-publish`](.github/actions/central-publish/action.yml)     | Check and sign a bundle for Central, upload it and wait for its validation            |
-| [`snapshot-upload`](.github/actions/snapshot-upload/action.yml)     | Check the snapshots of a build against the poms of the project, upload them           |
+| Action                                                                    | Purpose                                                                                 |
+|---------------------------------------------------------------------------|-----------------------------------------------------------------------------------------|
+| [`maven-setup`](.github/actions/maven-setup/action.yml)                   | Checkout, JDK with Maven cache, without any credentials                                 |
+| [`node-setup`](.github/actions/node-setup/action.yml)                     | Checkout, Node.js, Corepack and `yarn install`                                          |
+| [`maven-pom-pin`](.github/actions/maven-pom-pin/action.yml)               | Set a version property and the scm url in a `pom.xml`, return the previous values       |
+| [`docker-build`](.github/actions/docker-build/action.yml)                 | Build images without credentials and save them to an archive                            |
+| [`docker-push`](.github/actions/docker-push/action.yml)                   | Load the images of `docker-build`, tag them and push them to Docker Hub                 |
+| [`github-release`](.github/actions/github-release/action.yml)             | Create a GitHub release with generated notes, a notes file and assets                   |
+| [`workflow-dispatch`](.github/actions/workflow-dispatch/action.yml)       | Dispatch workflows in other repositories, optionally wait for their results             |
+| [`matrix-notify`](.github/actions/matrix-notify/action.yml)               | Send a message to a Matrix room                                                         |
+| [`check-trigger`](.github/actions/check-trigger/action.yml)               | Fail unless the run is on a branch and not started by the account of `DISPATCH_TOKEN`   |
+| [`pom-diff-check`](.github/actions/pom-diff-check/action.yml)             | Fail unless a commit changes nothing but given values in `pom.xml` files                |
+| [`central-bundle-check`](.github/actions/central-bundle-check/action.yml) | Check that a bundle for Central holds only unsigned files of the project in one version |
+| [`central-publish`](.github/actions/central-publish/action.yml)           | Check and sign a bundle for Central, upload it and wait for its validation              |
+| [`snapshot-upload`](.github/actions/snapshot-upload/action.yml)           | Check the snapshots of a build against the poms of the project, upload them             |
 
 ## Secrets
 
@@ -179,7 +180,8 @@ Release a change in this order:
 Third-party actions are pinned to commit SHAs and updated by Dependabot. Minor and patch updates come in one
 pull request, every major update in a pull request of its own, as it needs a look at the release notes.
 Tools the workflows call directly are pinned by hand, Dependabot does not see them: actionlint and zizmor in
-[`lint.yml`](docs/lint.md), Corepack in `node-setup` and `maven-help-plugin` in the Maven workflows.
+[`lint.yml`](docs/lint.md), Corepack in `node-setup`, `maven-help-plugin` in the Maven workflows and the default of
+`central-publishing-version` in `maven-deploy.yml`, `maven-deploy-pr.yml` and `maven-release.yml`.
 
 ## License
 

@@ -63,11 +63,11 @@ Other project specific steps run in the caller after the release, using the `ver
 ## Before the first release
 
 - `mycore-parent` 57 or newer, so the version branches since `2023.06.x` release as well. Its `git` profile configures
-  the release plugin with the tag format `v@{project.version}` and `release-profile` attaches sources and javadoc.
-  The build switches `deploy-to-central` off and deploys with the `maven-deploy-plugin` of the parent into a
-  directory, independent of the version of the `central-publishing-maven-plugin` the parent brings. From 0.12.0 on,
-  that plugin could create the bundle itself with `-DskipUpload=true`, but the parents 57 to 59 of the branches since
-  2023 bring 0.7.0 to 0.10.0.
+  the release plugin with the tag format `v@{project.version}`, `release-profile` attaches sources and javadoc and
+  `deploy-to-central` creates the bundle for Central. The parents bring the `central-publishing-maven-plugin` 0.7.0
+  to 0.10.0 in the property `central-publishing-maven-plugin.version`. The build sets it to the input
+  `central-publishing-version`, 0.12.0 or newer, the first version that creates the bundle without uploading it
+  (`-DskipUpload=true`).
 - An own `<scm>` section in the root `pom.xml` with `connection`, `developerConnection` and `url` of the repository.
   An inherited one points to the repository of the parent.
 - The [environment `release`](../README.md#the-environment-release) with the Central token and the signing key.
@@ -87,6 +87,7 @@ Other project specific steps run in the caller after the release, using the `ver
 | `dependency-artifact`            | no              |                                              | `groupId:artifactId` checked on Maven Central for `dependency-version` before the release starts, e.g. `org.mycore:mycore-base` |
 | `prepare-args`                   | no              |                                              | Arguments passed to the build of `release:prepare`, e.g. profiles or `-DskipTests`                                              |
 | `build-args`                     | no              | `-Prelease-profile -DskipTests`              | Arguments of the build of the tag, which creates the bundle for Central, see [Examples](#examples)                              |
+| `central-publishing-version`     | no              | `0.12.0`                                     | Version of the `central-publishing-maven-plugin` that creates the bundle, 0.12.0 or newer                                       |
 | `maven-opts`                     | no              |                                              | `MAVEN_OPTS` of prepare and build, e.g. `-Xss128M`                                                                              |
 | `group-id-prefix`                | no              | `org.mycore`                                 | groupId every published file must have, or start with followed by a dot                                                         |
 | `release-notes-file`             | no              |                                              | File in the repository appended to the release notes, `@VERSION@` is replaced                                                   |
@@ -133,7 +134,7 @@ flowchart LR
 | `check`          | only whether they are set  | no                  | Checks trigger, secrets and inputs                        |
 | `prepare`        | none                       | yes                 | Pins, `release:prepare` with the tests, Git bundle        |
 | `build`          | none                       | yes                 | Builds the tag: bundle for Central, assets, Docker images |
-| `push`           | key of the GitHub App      | no                  | Checks the Git bundle, pushes branch and tag              |
+| `push`           | key of the GitHub App      | no                  | Checks both bundles, pushes branch and tag                |
 | `publish`        | signing key, Central token | no                  | Checks and signs the bundle, uploads it to Central        |
 | `images`         | Docker Hub login           | no                  | Pushes the images of build                                |
 | `github-release` | `GITHUB_TOKEN`             | no                  | Creates the GitHub release                                |
@@ -144,9 +145,10 @@ flowchart LR
    account of `DISPATCH_TOKEN`, see [Who may release](#who-may-release). The Central token and the signing key must
    be set, the Docker Hub login with `docker-images` and the key of the GitHub App with `RELEASE_APP_CLIENT_ID`,
    otherwise the run would only fail in publish, after the push. Versions must not contain whitespace,
-   `release-version` must not start with `v` or end with `-SNAPSHOT`, and `dependency-version` is required with
-   `dependency-property` and must not be a snapshot. With `dependency-artifact`, the workflow stops if that version
-   is not on Maven Central yet, e.g. when the MyCoRe release is still being published.
+   `release-version` must not start with `v` or end with `-SNAPSHOT`, `dependency-version` is required with
+   `dependency-property` and must not be a snapshot, and `central-publishing-version` must be 0.12.0 or newer. With
+   `dependency-artifact`, the workflow stops if that version is not on Maven Central yet, e.g. when the MyCoRe
+   release is still being published.
 2. **prepare** runs without secrets.
    1. **Pin.** In the root `pom.xml`, the property `dependency-property` gets `dependency-version` and the `<url>`
       in `<scm>` gets `https://github.com/<repository>/tree/v<version>`. The released pom then points to its sources.
@@ -158,26 +160,34 @@ flowchart LR
       previous value. Both are folded into the development commit, so after the release the pom differs from before
       only in the version, and in the property if a development value was given.
    4. **Bundle.** Commits and tag go into a Git bundle, which the job uploads as artifact for one day.
-3. **build** runs without secrets as well. It checks out the tag from the bundle and builds it with
-   `mvn deploy -DskipDeployToCentral` and `build-args`, which deploys into a directory instead of uploading. That
-   directory without the `maven-metadata.xml` files, which Central creates itself, is the unsigned bundle for
-   Central. Modules with `maven.deploy.skip` are left out, as with every deploy. The job also collects the release
-   assets and builds the Docker images. Its result is only published after push has checked the commits it was
-   built from.
-4. **push** checks the Git bundle before anything is pushed:
+3. **build** runs without secrets as well. It checks out the tag from the bundle and builds it with `mvn deploy`,
+   `build-args`, `-DskipUpload=true` and `-Dcentral-publishing-maven-plugin.version` set to
+   `central-publishing-version`, after `build-args`, which therefore cannot change them. `deploy-to-central` of the
+   parent creates the unsigned bundle for Central in `target/central-publishing` and does not upload it, the job
+   moves it away and removes the work directories of the plugin. As in every release with that plugin, the bundle
+   contains modules with `maven.deploy.skip` as well, e.g. `mir-it` up to `2025.06.x`, so they stay available on
+   Central. Only `skipPublishing` leaves a module out. The job also collects the release assets and builds the
+   Docker images. Its result is only published after push has checked the commits it was built from.
+4. **push** checks the Git bundle and the bundle for Central before anything is pushed:
    - It builds on the commit of the run: the pin commit, if anything was pinned, the release commit with the tag
      and the development commit, without merges.
    - Only `pom.xml` files change, and in them only values. The pin commit sets the scm url and the property, the
      release commit also `<version>` to the release version and `<tag>` to `v<version>`, the development commit
      `<version>` to the development version, `<tag>` to `HEAD` and the property to `dependency-development-version`.
    - The versions match `release-version` and `development-version`, if given.
+   - Every file of the bundle for Central belongs to a component under `group-id-prefix` in the release version and
+     is not signed yet, checked with [`central-bundle-check`](../.github/actions/central-bundle-check/action.yml).
+     A module publish would refuse, e.g. one with `maven.deploy.skip` and another groupId, fails the run here.
+   - Every component in the bundle for Central has its pom and every file its md5 and sha1, Central refuses the
+     bundle otherwise.
 
    Then branch and tag are pushed in one atomic push, with a token of the GitHub App created right before.
    If someone pushed to the branch in the meantime, nothing is pushed and the run fails.
 5. **publish** first checks that the tag is still the pushed one. Every file of the bundle must belong to a component
-   under `group-id-prefix` in the release version, without signatures of its own and without links. publish signs
-   every file but the checksums, adds checksums of the signatures, uploads the bundle with the publisher API of
-   Central for automatic publishing and waits up to 30 minutes until Central has validated it.
+   under `group-id-prefix` in the release version, without signatures of its own and without links, every component
+   must have its pom and every file its md5 and sha1. publish signs every file but the checksums, adds checksums of
+   the signatures, uploads the bundle with the publisher API of Central for automatic publishing and waits up to 30
+   minutes until Central has validated it.
 6. **images** and **github-release** run after a successful publish, independently of each other. images pushes the
    images of build, tagged with the version. github-release creates the GitHub release `v<version>` with the notes
    GitHub generates since the previous `v*` tag, the [notes file](#release-notes-and-assets) and the assets.
@@ -192,15 +202,15 @@ account.
 
 ## When something fails
 
-| Failing job                                                         | State afterwards                                                              | What to do                                                                                  |
-|---------------------------------------------------------------------|-------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------|
-| `check`, `prepare` or `build`                                       | Nothing pushed                                                                | Fix the cause, start a new run                                                              |
-| `push`                                                              | Nothing pushed, also when only the tag was rejected or the bundle was refused | Check the GitHub App and the rulesets, or the log of prepare for a refused bundle           |
-| `publish` before the upload, or Central refused it                  | Rolled back: the release commits are reverted, the tag is deleted             | Fix the cause, the version can be released again                                            |
-| `publish` after the upload, e.g. cancelled or not validated in time | Tag and commits stay, the deployment may still be published                   | Re-run the failed jobs: publish waits for the same deployment, then continues or rolls back |
-| `images`                                                            | Released, the GitHub release is created anyway                                | Re-run the failed jobs or push the images by hand                                           |
-| `github-release`                                                    | Released                                                                      | Re-run the failed jobs or create the release by hand                                        |
-| `rollback`                                                          | Tag and commits stay, nothing is on Central                                   | Revert the release commits and delete the tag by hand                                       |
+| Failing job                                                         | State afterwards                                                            | What to do                                                                                  |
+|---------------------------------------------------------------------|-----------------------------------------------------------------------------|---------------------------------------------------------------------------------------------|
+| `check`, `prepare` or `build`                                       | Nothing pushed                                                              | Fix the cause, start a new run                                                              |
+| `push`                                                              | Nothing pushed, also when only the tag was rejected or a bundle was refused | Check the GitHub App and the rulesets, or the log of prepare or build for a refused bundle  |
+| `publish` before the upload, or Central refused it                  | Rolled back: the release commits are reverted, the tag is deleted           | Fix the cause, the version can be released again                                            |
+| `publish` after the upload, e.g. cancelled or not validated in time | Tag and commits stay, the deployment may still be published                 | Re-run the failed jobs: publish waits for the same deployment, then continues or rolls back |
+| `images`                                                            | Released, the GitHub release is created anyway                              | Re-run the failed jobs or push the images by hand                                           |
+| `github-release`                                                    | Released                                                                    | Re-run the failed jobs or create the release by hand                                        |
+| `rollback`                                                          | Tag and commits stay, nothing is on Central                                 | Revert the release commits and delete the tag by hand                                       |
 
 "Re-run failed jobs" continues a run with the artifacts of prepare and build, which are kept for a day:
 - After a failing push, e.g. because of the GitHub App, as long as nobody pushed to the branch in the meantime.

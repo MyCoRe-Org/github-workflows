@@ -43,24 +43,26 @@ To rebuild dependent projects after the deploy, add a job with [`dispatch-downst
 
 `mycore-parent` 57 or newer, so the version branches since `2023.06.x` deploy as well. Snapshots go to
 `https://central.sonatype.com/repository/maven-snapshots`, the snapshot repository the parent configures.
-The upload uses the `maven-deploy-plugin` in the version the parent manages, the build switches the profile
-`deploy-to-central` off. Up to version 56 the parent deploys to OSSRH, which is shut down. Without the property
+The profile `deploy-to-central` of the parent stages them with the `central-publishing-maven-plugin` in the version
+`central-publishing-version`, see [How it works](#how-it-works). The upload uses the `maven-deploy-plugin` in the
+version the parent manages. Up to version 56 the parent deploys to OSSRH, which is shut down. Without the property
 `maven-deploy-plugin.version` of the parent the run fails before the build.
 
 ## Inputs
 
-| Input               | Required | Default | Description                                                                                                                  |
-|---------------------|----------|---------|------------------------------------------------------------------------------------------------------------------------------|
-| `java-version`      | yes      |         | Java version, e.g. `'25'`                                                                                                    |
-| `skip-tests`        | no       | `false` | Deploy without running the tests again                                                                                       |
-| `build-args`        | no       |         | Arguments of the build, e.g. `-Dtomcat`, see [Examples](#examples)                                                           |
-| `maven-opts`        | no       |         | `MAVEN_OPTS` of the build, e.g. `-Xss128M`                                                                                   |
-| `setup-browser`     | no       | `false` | See [`maven-build.yml`](maven-build.md)                                                                                      |
-| `project-setup`     | no       | `false` | See [`maven-build.yml`](maven-build.md#project-setup)                                                                        |
-| `docker-images`     | no       |         | Images to push after the deploy, see [Docker images](#docker-images)                                                         |
-| `docker-date-tag`   | no       | `false` | Additionally tag the images with `<branch>-<date>`                                                                           |
-| `version-qualifier` | no       |         | Deploy `<version>-<qualifier>-SNAPSHOT` instead of `<version>-SNAPSHOT`, used by [`maven-deploy-pr.yml`](maven-deploy-pr.md) |
-| `environment`       | no       |         | Environment of the jobs with secrets, e.g. `snapshot`, see [Environment](#environment)                                       |
+| Input                        | Required | Default  | Description                                                                                                                  |
+|------------------------------|----------|----------|------------------------------------------------------------------------------------------------------------------------------|
+| `java-version`               | yes      |          | Java version, e.g. `'25'`                                                                                                    |
+| `skip-tests`                 | no       | `false`  | Deploy without running the tests again                                                                                       |
+| `build-args`                 | no       |          | Arguments of the build, e.g. `-Dtomcat`, see [Examples](#examples)                                                           |
+| `central-publishing-version` | no       | `0.12.0` | Version of the `central-publishing-maven-plugin` that stages the snapshots, 0.12.0 or newer                                  |
+| `maven-opts`                 | no       |          | `MAVEN_OPTS` of the build, e.g. `-Xss128M`                                                                                   |
+| `setup-browser`              | no       | `false`  | See [`maven-build.yml`](maven-build.md)                                                                                      |
+| `project-setup`              | no       | `false`  | See [`maven-build.yml`](maven-build.md#project-setup)                                                                        |
+| `docker-images`              | no       |          | Images to push after the deploy, see [Docker images](#docker-images)                                                         |
+| `docker-date-tag`            | no       | `false`  | Additionally tag the images with `<branch>-<date>`                                                                           |
+| `version-qualifier`          | no       |          | Deploy `<version>-<qualifier>-SNAPSHOT` instead of `<version>-SNAPSHOT`, used by [`maven-deploy-pr.yml`](maven-deploy-pr.md) |
+| `environment`                | no       |          | Environment of the jobs with secrets, e.g. `snapshot`, see [Environment](#environment)                                       |
 
 | Secret                                   | Description                                   |
 |------------------------------------------|-----------------------------------------------|
@@ -73,19 +75,25 @@ The upload uses the `maven-deploy-plugin` in the version the parent manages, the
 The deploy runs in three jobs, so code of the project, the tests, Maven plugins and npm packages included, never runs
 with a secret:
 
-| Job      | Secrets          | Code of the project | Does                                                          |
-|----------|------------------|---------------------|---------------------------------------------------------------|
-| `build`  | none             | yes                 | Builds and tests, deploys into a directory, builds the images |
-| `deploy` | Central token    | no                  | Checks the directory, uploads the snapshots of the project    |
-| `images` | Docker Hub login | no                  | Pushes the images of `build` with the tags of the branch      |
+| Job      | Secrets          | Code of the project | Does                                                                     |
+|----------|------------------|---------------------|--------------------------------------------------------------------------|
+| `build`  | none             | yes                 | Builds and tests, stages the snapshots in a directory, builds the images |
+| `deploy` | Central token    | no                  | Checks the directory, uploads the snapshots of the project               |
+| `images` | Docker Hub login | no                  | Pushes the images of `build` with the tags of the branch                 |
 
-1. **build** checks out the commit with [`maven-setup`](../.github/actions/maven-setup/action.yml).
+1. **build** fails first if `central-publishing-version` is not 0.12.0 or newer, the first version with `skipUpload`.
+   Then it checks out the commit with [`maven-setup`](../.github/actions/maven-setup/action.yml).
    - With `version-qualifier`, `versions:set` changes the version of all modules, e.g. `2026.06.1-SNAPSHOT` with the
      qualifier `test` to `2026.06.1-test-SNAPSHOT`. The qualifier may only contain letters, digits, `.`, `_` and `-`,
      and the project must have a snapshot version.
-   - `mvn deploy -DskipDeployToCentral` with `build-args` builds, runs the tests unless `skip-tests` is set, and
-     deploys into a directory instead of uploading. Modules with `maven.deploy.skip` are left out. `build-args`
-     cannot change where the snapshots go, only deploy uploads them. `versions:set` gets `build-args` as well.
+   - A project that is no snapshot fails the run before the build.
+   - `mvn deploy` with `build-args` builds and runs the tests unless `skip-tests` is set. After `build-args`, so they
+     cannot change them, come `-Dcentral-publishing-maven-plugin.version` set to `central-publishing-version`,
+     `-DskipUpload=true` and `-DdeferredDirectory` set to a directory outside the checkout. `deploy-to-central` of the
+     parent stages the snapshots there instead of uploading them. Like every deploy with that plugin, it stages
+     modules with `maven.deploy.skip` as well, e.g. `mir-it` up to `2025.06.x`, only `skipPublishing` leaves a module
+     out. `build-args` cannot change where the snapshots go, only deploy uploads them. `versions:set` gets
+     `build-args` as well.
    - With `docker-images`, it builds the images and saves them for the job `images`.
 2. **deploy** checks out the commit again, but only reads its poms, with
    [`snapshot-upload`](../.github/actions/snapshot-upload/action.yml).

@@ -12,6 +12,10 @@ on:
       build-args:
         type: string
         default: ''
+      # pinned, Dependabot does not see it
+      central-publishing-version:
+        type: string
+        default: '0.12.0'
       maven-opts:
         type: string
         default: ''
@@ -46,7 +50,7 @@ on:
 # Code of the project, the tests, Maven plugins and npm packages included, only runs in build, which gets no secret.
 # deploy and images run no code of the project and only upload what belongs to it.
 jobs:
-  # builds and tests the snapshot and deploys it into a directory instead of uploading it
+  # builds and tests the snapshot and stages it in a directory instead of uploading it
   build:
     runs-on: ubuntu-latest
     permissions:
@@ -58,6 +62,21 @@ jobs:
       deploy-plugin-version: ${{ steps.build.outputs.deploy-plugin-version }}
       has-images: ${{ steps.images.outputs.has-images }}
     steps:
+      # the build needs skipUpload, which the central-publishing-maven-plugin has from 0.12.0 on
+      - name: Check central-publishing-version
+        env:
+          CENTRAL_PUBLISHING_VERSION: ${{ inputs.central-publishing-version }}
+        run: |
+          if [[ ! "$CENTRAL_PUBLISHING_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            || [ "$(printf '%s\n' 0.12.0 "$CENTRAL_PUBLISHING_VERSION" | sort -V | head -n 1)" != 0.12.0 ]; then
+            echo "::error::central-publishing-version '${CENTRAL_PUBLISHING_VERSION}' is no version 0.12.0 or newer, older ones have no skipUpload"
+            exit 1
+          fi
+          # deploy reads the staging directory as 0.12.0 writes it
+          if [ "$CENTRAL_PUBLISHING_VERSION" != 0.12.0 ]; then
+            echo "::warning::the upload of the snapshots knows the staging directory of central-publishing-maven-plugin 0.12.0, ${CENTRAL_PUBLISHING_VERSION} may write it differently and fail in deploy"
+          fi
+
       - uses: $/.github/actions/maven-setup
         with:
           java-version: ${{ inputs.java-version }}
@@ -95,14 +114,31 @@ jobs:
             "${ARGS[@]}"
           echo "Deploying ${QUALIFIED}"
 
-      # deploy-to-central of mycore-parent would upload, so the build deploys into a directory instead
+      # deploy-to-central of mycore-parent stages the snapshots, -DskipUpload=true keeps them in deferredDirectory
+      # instead of uploading them. -D sets the plugin to central-publishing-version, the parents bring versions without
+      # skipUpload, see maven-release.yml. Like every deploy with the plugin, it stages modules with maven.deploy.skip
+      # as well (e.g. mir-it up to 2025.06.x), only skipPublishing leaves a module out
       - name: Build the snapshot
         id: build
         env:
           SKIP_TESTS_FLAG: ${{ inputs.skip-tests && '-DskipTests' || '' }}
           BUILD_ARGS: ${{ inputs.build-args }}
+          CENTRAL_PUBLISHING_VERSION: ${{ inputs.central-publishing-version }}
         run: |
           set -euo pipefail
+          # pinned, mycore-parent does not manage it and Dependabot does not see it.
+          # Maven writes its errors to stdout, they are printed if it fails
+          VERSION="$(mvn --batch-mode --no-transfer-progress -q -N \
+            org.apache.maven.plugins:maven-help-plugin:3.5.2:evaluate -Dexpression=project.version -DforceStdout)" \
+            || { echo "$VERSION"; exit 1; }
+          # for a release the plugin would build a bundle for Central, which nothing uploads
+          case "$VERSION" in
+            *-SNAPSHOT) ;;
+            *)
+              echo "::error::${VERSION} is not a snapshot, only snapshots are deployed"
+              exit 1
+              ;;
+          esac
           # deploy uploads with the maven-deploy-plugin the parent manages and checks the version again,
           # this only fails before the build
           DEPLOY_PLUGIN="$(mvn --batch-mode --no-transfer-progress -q -N \
@@ -114,9 +150,16 @@ jobs:
           fi
           echo "deploy-plugin-version=${DEPLOY_PLUGIN}" >> "$GITHUB_OUTPUT"
           read -r -a ARGS <<< "$BUILD_ARGS"
-          mvn --batch-mode --no-transfer-progress deploy -DskipDeployToCentral \
-            "-DaltDeploymentRepository=snapshot-staging::file://${RUNNER_TEMP}/snapshot-staging" \
-            ${SKIP_TESTS_FLAG:+"$SKIP_TESTS_FLAG"} "${ARGS[@]}"
+          STAGING="${RUNNER_TEMP}/snapshot-staging"
+          # the last -D wins, so build-args cannot change the checked version, turn the upload on or move the snapshots
+          mvn --batch-mode --no-transfer-progress deploy ${SKIP_TESTS_FLAG:+"$SKIP_TESTS_FLAG"} "${ARGS[@]}" \
+            "-Dcentral-publishing-maven-plugin.version=${CENTRAL_PUBLISHING_VERSION}" -DskipUpload=true \
+            "-DdeferredDirectory=${STAGING}"
+          # the hidden .index of the plugin is no snapshot, upload-artifact leaves it out
+          if [ -z "$(find "$STAGING" -type f ! -name '.*' -print -quit 2> /dev/null)" ]; then
+            echo "::error::the build staged nothing in ${STAGING}, deploy-to-central of mycore-parent 57 or newer stages the snapshots"
+            exit 1
+          fi
 
       # built here without credentials, the job images only pushes them
       - name: Build the Docker images

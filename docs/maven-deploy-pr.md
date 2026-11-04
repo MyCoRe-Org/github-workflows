@@ -60,18 +60,19 @@ the `if` above before its pull request template switches to `snapshot.qualifier`
 
 ## Inputs
 
-| Input            | Required | Default                         | Description                                                                             |
-|------------------|----------|---------------------------------|-----------------------------------------------------------------------------------------|
-| `java-version`   | yes      |                                 | Java version, e.g. `'25'`                                                               |
-| `required-label` | no       | `snapshot-deploy`               | Label the pull request needs                                                            |
-| `actor`          | no       | `github.actor`                  | User whose permission is checked, see [`require-permission.yml`](require-permission.md) |
-| `labels`         | no       | labels of the pull request      | Labels as comma separated list                                                          |
-| `payload`        | no       | description of the pull request | Text containing the line `snapshot.qualifier: <qualifier>`                              |
-| `skip-tests`     | no       | `false`                         | See [`maven-deploy.yml`](maven-deploy.md)                                               |
-| `build-args`     | no       |                                 | See [`maven-deploy.yml`](maven-deploy.md)                                               |
-| `maven-opts`     | no       |                                 | See [`maven-deploy.yml`](maven-deploy.md)                                               |
-| `setup-browser`  | no       | `false`                         | See [`maven-build.yml`](maven-build.md)                                                 |
-| `project-setup`  | no       | `false`                         | See [`maven-build.yml`](maven-build.md#project-setup)                                   |
+| Input                        | Required | Default                         | Description                                                                             |
+|------------------------------|----------|---------------------------------|-----------------------------------------------------------------------------------------|
+| `java-version`               | yes      |                                 | Java version, e.g. `'25'`                                                               |
+| `required-label`             | no       | `snapshot-deploy`               | Label the pull request needs                                                            |
+| `actor`                      | no       | `github.actor`                  | User whose permission is checked, see [`require-permission.yml`](require-permission.md) |
+| `labels`                     | no       | labels of the pull request      | Labels as comma separated list                                                          |
+| `payload`                    | no       | description of the pull request | Text containing the line `snapshot.qualifier: <qualifier>`                              |
+| `skip-tests`                 | no       | `false`                         | See [`maven-deploy.yml`](maven-deploy.md)                                               |
+| `build-args`                 | no       |                                 | See [`maven-deploy.yml`](maven-deploy.md)                                               |
+| `central-publishing-version` | no       | `0.12.0`                        | See [`maven-deploy.yml`](maven-deploy.md)                                               |
+| `maven-opts`                 | no       |                                 | See [`maven-deploy.yml`](maven-deploy.md)                                               |
+| `setup-browser`              | no       | `false`                         | See [`maven-build.yml`](maven-build.md)                                                 |
+| `project-setup`              | no       | `false`                         | See [`maven-build.yml`](maven-build.md#project-setup)                                   |
 
 | Secret                              | Description            |
 |-------------------------------------|------------------------|

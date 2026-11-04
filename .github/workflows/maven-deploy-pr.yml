@@ -28,6 +28,10 @@ on:
       build-args:
         type: string
         default: ''
+      # pinned, Dependabot does not see it
+      central-publishing-version:
+        type: string
+        default: '0.12.0'
       maven-opts:
         type: string
         default: ''
@@ -113,6 +117,7 @@ jobs:
       version-qualifier: ${{ needs.check.outputs.qualifier }}
       skip-tests: ${{ inputs.skip-tests }}
       build-args: ${{ inputs.build-args }}
+      central-publishing-version: ${{ inputs.central-publishing-version }}
       maven-opts: ${{ inputs.maven-opts }}
       setup-browser: ${{ inputs.setup-browser }}
       project-setup: ${{ inputs.project-setup }}
