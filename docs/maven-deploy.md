@@ -59,7 +59,7 @@ credentials for. Remove such profiles when switching to this workflow.
 |------------------------------|----------|----------|------------------------------------------------------------------------------------------------------------------------------|
 | `java-version`               | yes      |          | Java version, e.g. `'25'`                                                                                                    |
 | `skip-tests`                 | no       | `false`  | Deploy without running the tests again                                                                                       |
-| `build-args`                 | no       |          | Arguments of the build, e.g. `-Dtomcat`, see [Examples](#examples)                                                           |
+| `build-args`                 | no       |          | Arguments of the build, separated by spaces or lines, e.g. `-Dtomcat`, see [Examples](#examples)                             |
 | `central-publishing-version` | no       | `0.12.0` | Version of the `central-publishing-maven-plugin` that stages the snapshots, 0.12.0 or newer, empty for the default           |
 | `maven-opts`                 | no       |          | `MAVEN_OPTS` of the build, e.g. `-Xss128M`                                                                                   |
 | `setup-browser`              | no       | `false`  | See [`maven-build.yml`](maven-build.md)                                                                                      |

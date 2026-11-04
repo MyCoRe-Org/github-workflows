@@ -357,7 +357,8 @@ jobs:
           BUILD_ARGS: ${{ inputs.build-args }}
         run: |
           set -euo pipefail
-          read -r -a ARGS <<< "$BUILD_ARGS"
+          # split at spaces and line breaks, so a YAML block keeps all its arguments
+          read -r -d '' -a ARGS <<< "$BUILD_ARGS" || true
           # the last -D wins, so build-args cannot change the checked version or turn the upload on
           mvn --batch-mode --no-transfer-progress deploy "${ARGS[@]}" \
             "-Dcentral-publishing-maven-plugin.version=${CENTRAL_PUBLISHING_VERSION}" -DskipUpload=true

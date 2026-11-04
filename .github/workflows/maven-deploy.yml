@@ -108,8 +108,9 @@ jobs:
               ;;
           esac
           QUALIFIED="${VERSION%-SNAPSHOT}-${QUALIFIER}-SNAPSHOT"
-          # with the arguments of the build, whose profiles may add modules
-          read -r -a ARGS <<< "$BUILD_ARGS"
+          # with the arguments of the build, whose profiles may add modules. Split at spaces and line breaks, so a
+          # YAML block keeps all its arguments
+          read -r -d '' -a ARGS <<< "$BUILD_ARGS" || true
           mvn --batch-mode --no-transfer-progress versions:set -DnewVersion="$QUALIFIED" -DgenerateBackupPoms=false \
             "${ARGS[@]}"
           echo "Deploying ${QUALIFIED}"
@@ -148,7 +149,8 @@ jobs:
             exit 1
           fi
           echo "deploy-plugin-version=${DEPLOY_PLUGIN}" >> "$GITHUB_OUTPUT"
-          read -r -a ARGS <<< "$BUILD_ARGS"
+          # split at spaces and line breaks, so a YAML block keeps all its arguments
+          read -r -d '' -a ARGS <<< "$BUILD_ARGS" || true
           STAGING="${RUNNER_TEMP}/snapshot-staging"
           # the last -D wins, so build-args cannot change the checked version, turn the upload on or move the snapshots
           mvn --batch-mode --no-transfer-progress deploy ${SKIP_TESTS_FLAG:+"$SKIP_TESTS_FLAG"} "${ARGS[@]}" \
