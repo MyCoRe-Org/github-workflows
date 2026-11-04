@@ -152,10 +152,26 @@ jobs:
           # split at spaces and line breaks, so a YAML block keeps all its arguments
           read -r -d '' -a ARGS <<< "$BUILD_ARGS" || true
           STAGING="${RUNNER_TEMP}/snapshot-staging"
-          # the last -D wins, so build-args cannot change the checked version, turn the upload on or move the snapshots
+          # the last -D wins, so build-args cannot change the checked version, turn the upload on or move the snapshots.
+          # A module the plugin does not stage, or a build without deploy-to-central, deploys with the
+          # maven-deploy-plugin, into STRAY instead of a repository of its own. The plugin takes the release and
+          # snapshot variants of altDeploymentRepository first, so all three are set
+          STRAY="${RUNNER_TEMP}/stray-deploy"
           mvn --batch-mode --no-transfer-progress deploy ${SKIP_TESTS_FLAG:+"$SKIP_TESTS_FLAG"} "${ARGS[@]}" \
             "-Dcentral-publishing-maven-plugin.version=${CENTRAL_PUBLISHING_VERSION}" -DskipUpload=true \
-            "-DdeferredDirectory=${STAGING}"
+            "-DdeferredDirectory=${STAGING}" "-DaltDeploymentRepository=stray::file://${STRAY}" \
+            "-DaltReleaseDeploymentRepository=stray::file://${STRAY}" \
+            "-DaltSnapshotDeploymentRepository=stray::file://${STRAY}"
+          if [ -n "$(find "$STRAY" -type f -print -quit 2> /dev/null)" ]; then
+            # the poms name the modules, without a pom any file does. The build wrote the names, a line break would
+            # start a workflow command
+            DEPLOYED="$(find "$STRAY" -type f -name '*.pom' -printf '%P ')"
+            [ -n "$DEPLOYED" ] || DEPLOYED="$(find "$STRAY" -type f -printf '%P ')"
+            DEPLOYED="$(tr -d '[:cntrl:]' <<< "${DEPLOYED% }")"
+            [ "${#DEPLOYED}" -le 200 ] || DEPLOYED="${DEPLOYED:0:200}..."
+            echo "::error::the build deployed ${DEPLOYED} without the central-publishing-maven-plugin, deploy-to-central of mycore-parent 57 or newer must stage every module"
+            exit 1
+          fi
           # the hidden .index of the plugin is no snapshot, upload-artifact leaves it out
           if [ -z "$(find "$STAGING" -type f ! -name '.*' -print -quit 2> /dev/null)" ]; then
             echo "::error::the build staged nothing in ${STAGING}, deploy-to-central of mycore-parent 57 or newer stages the snapshots"

@@ -359,9 +359,26 @@ jobs:
           set -euo pipefail
           # split at spaces and line breaks, so a YAML block keeps all its arguments
           read -r -d '' -a ARGS <<< "$BUILD_ARGS" || true
-          # the last -D wins, so build-args cannot change the checked version or turn the upload on
+          # the last -D wins, so build-args cannot change the checked version or turn the upload on. A module the plugin
+          # does not stage, or a build without deploy-to-central, deploys with the maven-deploy-plugin, into STRAY
+          # instead of a repository of its own. The plugin takes the release and snapshot variants of
+          # altDeploymentRepository first, so all three are set
+          STRAY="${RUNNER_TEMP}/stray-deploy"
           mvn --batch-mode --no-transfer-progress deploy "${ARGS[@]}" \
-            "-Dcentral-publishing-maven-plugin.version=${CENTRAL_PUBLISHING_VERSION}" -DskipUpload=true
+            "-Dcentral-publishing-maven-plugin.version=${CENTRAL_PUBLISHING_VERSION}" -DskipUpload=true \
+            "-DaltDeploymentRepository=stray::file://${STRAY}" \
+            "-DaltReleaseDeploymentRepository=stray::file://${STRAY}" \
+            "-DaltSnapshotDeploymentRepository=stray::file://${STRAY}"
+          if [ -n "$(find "$STRAY" -type f -print -quit 2> /dev/null)" ]; then
+            # the poms name the modules, without a pom any file does. The build wrote the names, a line break would
+            # start a workflow command
+            DEPLOYED="$(find "$STRAY" -type f -name '*.pom' -printf '%P ')"
+            [ -n "$DEPLOYED" ] || DEPLOYED="$(find "$STRAY" -type f -printf '%P ')"
+            DEPLOYED="$(tr -d '[:cntrl:]' <<< "${DEPLOYED% }")"
+            [ "${#DEPLOYED}" -le 200 ] || DEPLOYED="${DEPLOYED:0:200}..."
+            echo "::error::the build deployed ${DEPLOYED} without the central-publishing-maven-plugin, deploy-to-central of mycore-parent 57 or newer must stage every module"
+            exit 1
+          fi
           # in the build directory of the first project with the plugin, usually the root
           mapfile -t BUNDLES < <(find . -name node_modules -prune -o -type f \
             -path '*/target/central-publishing/central-bundle.zip' -print)

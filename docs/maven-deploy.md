@@ -97,8 +97,10 @@ with a secret:
      `-DskipUpload=true` and `-DdeferredDirectory` set to a directory outside the checkout. `deploy-to-central` of the
      parent stages the snapshots there instead of uploading them. Like every deploy with that plugin, it stages
      modules with `maven.deploy.skip` as well, e.g. `mir-it` up to `2025.06.x`, only `skipPublishing` leaves a module
-     out. `build-args` cannot change where the snapshots go, only deploy uploads them. `versions:set` gets
-     `build-args` as well.
+     out. A module the plugin does not stage, or a build without `deploy-to-central`, would deploy with the
+     `maven-deploy-plugin`; `-DaltDeploymentRepository` and its release and snapshot variants send that into a
+     directory of its own, and anything there fails the run. `build-args` cannot change where the snapshots go, only
+     deploy uploads them. `versions:set` gets `build-args` as well.
    - With `docker-images`, it builds the images and saves them for the job `images`.
 2. **deploy** checks out the commit again, but only reads its poms, with
    [`snapshot-upload`](../.github/actions/snapshot-upload/action.yml).

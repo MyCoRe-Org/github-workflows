@@ -167,8 +167,11 @@ flowchart LR
    parent creates the unsigned bundle for Central in `target/central-publishing` and does not upload it, the job
    moves it away and removes the work directories of the plugin. As in every release with that plugin, the bundle
    contains modules with `maven.deploy.skip` as well, e.g. `mir-it` up to `2025.06.x`, so they stay available on
-   Central. Only `skipPublishing` leaves a module out. The job also collects the release assets and builds the
-   Docker images. Its result is only published after push has checked the commits it was built from.
+   Central. Only `skipPublishing` leaves a module out. A module the plugin does not stage, or a build without
+   `deploy-to-central`, would deploy with the `maven-deploy-plugin`; `-DaltDeploymentRepository` and its release and
+   snapshot variants send that into a directory of its own, and anything there fails the run, so the build uploads
+   nothing itself. The job also collects the release assets and builds the Docker images. Its result is only
+   published after push has checked the commits it was built from.
 4. **push** checks the Git bundle and the bundle for Central before anything is pushed:
    - It builds on the commit of the run: the pin commit, if anything was pinned, the release commit with the tag
      and the development commit, without merges.
