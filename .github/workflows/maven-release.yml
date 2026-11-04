@@ -446,6 +446,7 @@ jobs:
       version: ${{ steps.push.outputs.version }}
       branch-sha: ${{ steps.bundle.outputs.branch-sha }}
       tag-sha: ${{ steps.bundle.outputs.tag-sha }}
+      central-bundle-sha256: ${{ steps.central-bundle.outputs.sha256 }}
     steps:
       # here as well, a re-run of this job alone does not repeat the job check
       - uses: $/.github/actions/check-trigger
@@ -539,7 +540,8 @@ jobs:
             ${{ inputs.dependency-property }}=${{ inputs.dependency-development-version }}
             project.build.outputTimestamp=*
 
-      # publish signs the bundle of build after the push, a file it would refuse fails the release before
+      # publish signs the bundle of build after the push, a file it would refuse fails the release before. The poms of
+      # the checkout name the modules, the release commit changes only values in them, checked above
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: central-bundle
@@ -551,6 +553,16 @@ jobs:
           bundle: ${{ runner.temp }}/central/central-bundle.zip
           version: ${{ needs.prepare.outputs.version }}
           group-id-prefix: ${{ inputs.group-id-prefix }}
+          project: '.'
+
+      # publish cannot check the modules without a checkout, it signs only this bundle. build could still replace the
+      # artifact
+      - name: Remember the checked bundle
+        id: central-bundle
+        run: |
+          set -euo pipefail
+          SHA256="$(sha256sum "${RUNNER_TEMP}/central/central-bundle.zip" | cut -d ' ' -f 1)"
+          echo "sha256=${SHA256}" >> "$GITHUB_OUTPUT"
 
       # valid for one hour and for this repository only, so it is created right before the push
       - name: Create the push token
@@ -624,6 +636,17 @@ jobs:
         with:
           name: central-bundle
           path: ${{ runner.temp }}/central
+
+      - name: Check that the bundle is the one push checked
+        env:
+          SHA256: ${{ needs.push.outputs.central-bundle-sha256 }}
+        run: |
+          set -euo pipefail
+          BUNDLE="${RUNNER_TEMP}/central/central-bundle.zip"
+          if [ -z "$SHA256" ] || ! sha256sum --check --status <<< "${SHA256}  ${BUNDLE}"; then
+            echo "::error::the bundle for Central is not the one push checked, nothing is published"
+            exit 1
+          fi
 
       - uses: $/.github/actions/central-publish
         with:

@@ -9,8 +9,9 @@ fail() {
   exit 1
 }
 
-# the entries are checked before extracting, with the check push runs before anything is pushed
-python3 -I "$(dirname "${BASH_SOURCE[0]}")/../central-bundle-check/check.py"
+# the entries are checked before extracting, with the check push runs before anything is pushed. publish has no
+# checkout, a PROJECT of the environment must not turn on the check of the modules
+PROJECT='' python3 -I "$(dirname "${BASH_SOURCE[0]}")/../central-bundle-check/check.py"
 
 WORK="$(mktemp -d)"
 GNUPGHOME="$(mktemp -d)"

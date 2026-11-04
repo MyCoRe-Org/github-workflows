@@ -176,19 +176,21 @@ flowchart LR
      release commit also `<version>` to the release version and `<tag>` to `v<version>`, the development commit
      `<version>` to the development version, `<tag>` to `HEAD` and the property to `dependency-development-version`.
    - The versions match `release-version` and `development-version`, if given.
-   - Every file of the bundle for Central belongs to a component under `group-id-prefix` in the release version and
-     is not signed yet, checked with [`central-bundle-check`](../.github/actions/central-bundle-check/action.yml).
-     A module publish would refuse, e.g. one with `maven.deploy.skip` and another groupId, fails the run here.
+   - Every file of the bundle for Central belongs to the project or one of its modules, also those of profiles, as
+     the poms of the commit name them, under `group-id-prefix` in the release version and is not signed yet,
+     checked with [`central-bundle-check`](../.github/actions/central-bundle-check/action.yml). A build that adds
+     anything else, or a module publish would refuse, e.g. one with `maven.deploy.skip` and another groupId, fails
+     the run here.
    - Every component in the bundle for Central has its pom and every file its md5 and sha1, Central refuses the
      bundle otherwise.
 
    Then branch and tag are pushed in one atomic push, with a token of the GitHub App created right before.
    If someone pushed to the branch in the meantime, nothing is pushed and the run fails.
-5. **publish** first checks that the tag is still the pushed one. Every file of the bundle must belong to a component
-   under `group-id-prefix` in the release version, without signatures of its own and without links, every component
-   must have its pom and every file its md5 and sha1. publish signs every file but the checksums, adds checksums of
-   the signatures, uploads the bundle with the publisher API of Central for automatic publishing and waits up to 30
-   minutes until Central has validated it.
+5. **publish** first checks that the tag is still the pushed one and that the bundle for Central is the one push
+   checked, by its sha256. Every file of the bundle must belong to a component under `group-id-prefix` in the release
+   version, without signatures of its own and without links, every component must have its pom and every file its
+   md5 and sha1. publish signs every file but the checksums, adds checksums of the signatures, uploads the bundle with
+   the publisher API of Central for automatic publishing and waits up to 30 minutes until Central has validated it.
 6. **images** and **github-release** run after a successful publish, independently of each other. images pushes the
    images of build, tagged with the version. github-release creates the GitHub release `v<version>` with the notes
    GitHub generates since the previous `v*` tag, the [notes file](#release-notes-and-assets) and the assets.

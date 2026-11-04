@@ -15,52 +15,17 @@ from pathlib import Path
 from xml.etree import ElementTree
 from xml.sax.saxutils import escape
 
-POM = "{http://maven.apache.org/POM/4.0.0}"
-NAME = re.compile(r"^[A-Za-z0-9._-]+$")
+# the components of the project are read like central-bundle-check reads them for a release, without leaving
+# bytecode in the directory of the action
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "central-bundle-check"))
+from pom_components import NAME, components, fail  # noqa: E402
+
 # metadata of the staging repository of the plugin
 METADATA = "maven-metadata-central-staging.xml"
 # list of the staged files the plugin writes beside them, the metadata names the same files. upload-artifact leaves
 # hidden files out, so it only shows up when the directory is passed on otherwise
 INDEX = ".index"
-
-
-def fail(message):
-    print(f"::error::{message}")
-    sys.exit(1)
-
-
-def text(element, *path):
-    for name in path:
-        element = None if element is None else element.find(POM + name)
-    return element.text.strip() if element is not None and element.text else None
-
-
-def components(project):
-    """groupId:artifactId of the project and its modules mapped to their versions"""
-    result, todo, seen = {}, [project / "pom.xml"], set()
-    while todo:
-        pom = todo.pop().resolve()
-        if pom in seen:
-            continue
-        seen.add(pom)
-        if project not in pom.parents:
-            fail(f"the module {pom} lies outside of the project")
-        if not pom.is_file():
-            print(f"::warning::{pom.relative_to(project)} does not exist, the module is not uploaded")
-            continue
-        root = ElementTree.parse(pom).getroot()
-        group = text(root, "groupId") or text(root, "parent", "groupId")
-        artifact = text(root, "artifactId")
-        version = text(root, "version") or text(root, "parent", "version")
-        # also keeps commas out of the lists of deploy-file
-        if not all(NAME.fullmatch(value or "") for value in (group, artifact, version)):
-            fail(f"{pom.relative_to(project)} has no plain groupId, artifactId and version")
-        result[f"{group}:{artifact}"] = version
-        modules = root.findall(f"{POM}modules/{POM}module") + root.findall(f"{POM}profiles/{POM}profile/{POM}modules/{POM}module")
-        for module in modules:
-            path = pom.parent / module.text.strip()
-            todo.append(path if path.suffix == ".xml" else path / "pom.xml")
-    return result
 
 
 def layout(coordinates):
@@ -90,8 +55,8 @@ def main():
     if not re.fullmatch(r"3\.[1-9][0-9]*\.[0-9]+", plugin):
         fail(f"'{plugin}' is no version 3.1 or newer of the maven-deploy-plugin")
 
-    expected = {}
-    for coordinates, version in components(project).items():
+    expected, missing = {}, []
+    for coordinates, version in components(project, missing=missing).items():
         if not version.endswith("-SNAPSHOT"):
             fail(f"{coordinates} has the version {version}, only snapshots are uploaded")
         expected[coordinates] = f"{version[:-len('-SNAPSHOT')]}-{qualifier}-SNAPSHOT" if qualifier else version
@@ -106,7 +71,9 @@ def main():
             continue
         owners = [c for c in expected if relative.startswith(layout(c) + "/")]
         if not owners:
-            fail(f"{relative} belongs to no component of the project, only those are uploaded")
+            # e.g. a module in a submodule that is not checked out
+            unread = f", and the checkout has no {', '.join(missing)}" if missing else ""
+            fail(f"{relative} belongs to no component of the project, only those are uploaded{unread}")
         owner = max(owners, key=lambda c: len(layout(c)))
         rest = relative[len(layout(owner)) + 1:].split("/")
         if len(rest) == 1 and rest[0].startswith(METADATA):

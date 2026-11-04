@@ -32,7 +32,7 @@ runs:
         PLUGIN_VERSION: ${{ inputs.deploy-plugin-version }}
         WORK: ${{ runner.temp }}/snapshot-upload
       run: |
-        python3 "$GITHUB_ACTION_PATH/upload.py"
+        python3 -I "$GITHUB_ACTION_PATH/upload.py"
 
     # outside the checkout, Maven would read .mvn of the project otherwise
     - name: Upload the snapshots

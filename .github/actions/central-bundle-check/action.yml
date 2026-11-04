@@ -1,9 +1,9 @@
 name: Central Bundle Check
 description: >-
   Fail unless every file of a bundle for Central belongs to a component of group-id-prefix in the given version and is
-  not signed yet, and every component has its pom and every file its md5 and sha1, without links and unreadable
-  entries. Reads the entries but extracts nothing and needs no secret, so a release can check the bundle before it
-  pushes anything.
+  not signed yet, with project also to the project or one of its modules, and every component has its pom and every
+  file its md5 and sha1, without links and unreadable entries. Reads the entries and the poms, extracts and runs nothing
+  and needs no secret, so a release can check the bundle before it pushes anything.
 
 inputs:
   bundle:
@@ -15,6 +15,12 @@ inputs:
   group-id-prefix:
     description: groupId every file must have, or start with followed by a dot, e.g. 'org.mycore'
     required: true
+  project:
+    description: >-
+      Checkout whose poms name the project and its modules, also those of profiles, empty to check only
+      group-id-prefix and version
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -24,5 +30,6 @@ runs:
         BUNDLE: ${{ inputs.bundle }}
         VERSION: ${{ inputs.version }}
         GROUP_ID_PREFIX: ${{ inputs.group-id-prefix }}
+        PROJECT: ${{ inputs.project }}
       run: |
         python3 -I "$GITHUB_ACTION_PATH/check.py"
