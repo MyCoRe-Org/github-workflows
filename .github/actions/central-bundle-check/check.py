@@ -8,6 +8,9 @@ import stat
 import sys
 import zipfile
 
+# a signature and its checksums
+SIGNED = re.compile(r"\.asc(\.(md5|sha1|sha256|sha512))?$")
+
 
 def fail(message):
     print(f"::error::{message}")
@@ -28,7 +31,7 @@ def main():
             broken = archive.testzip()
     except Exception as error:  # anything zipfile cannot read, e.g. a name that is no UTF-8 or an unknown compression
         fail(f"the bundle cannot be read as zip file: {error!r}")
-    path = prefix.replace(".", "/") + "/"
+    groups = prefix.split(".")
     found, poms, files, directories = set(), set(), set(), []
     for entry in entries:
         name = entry.filename
@@ -46,9 +49,11 @@ def main():
         parts = name.split("/")
         if len(parts) < 4 or any(part in (".", "..") or not SEGMENT.fullmatch(part) for part in parts):
             fail(refused)
-        artifact, directory, file = parts[-3:]
-        if (not name.startswith(path) or directory != version
-                or not file.startswith((f"{artifact}-{version}.", f"{artifact}-{version}-")) or ".asc" in file):
+        group, (artifact, directory, file) = parts[:-3], parts[-3:]
+        # the groupId is the path before <artifactId>/<version>, the start of the entry is not enough. Maven writes no
+        # dot into that path
+        if (group[: len(groups)] != groups or any("." in part for part in group) or directory != version
+                or not file.startswith((f"{artifact}-{version}.", f"{artifact}-{version}-")) or SIGNED.search(file)):
             fail(refused)
         # Central refuses a component without its pom
         component = "/".join(parts[:-2])
