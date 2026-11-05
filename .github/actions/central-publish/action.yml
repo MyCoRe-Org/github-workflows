@@ -3,6 +3,7 @@ description: >-
   Sign the files of a bundle of the central-publishing-maven-plugin and publish it on Sonatype Central.
   Id and last state of the deployment are kept in $RUNNER_TEMP/central-deployment, also when a step fails.
   If that directory already holds an id, e.g. of an earlier attempt, nothing is uploaded and the action waits for it.
+  An id that is not plain, or unknown for an upload Central answered without one, fails the action without an upload.
 
 inputs:
   bundle:
@@ -37,7 +38,7 @@ inputs:
 
 outputs:
   deployment-id:
-    description: Id of the deployment on Central, empty if nothing was uploaded
+    description: Id of the deployment on Central, 'unknown' if Central answered the upload without one, empty if nothing was uploaded
     value: ${{ steps.earlier.outputs.deployment-id || steps.upload.outputs.deployment-id }}
   state:
     description: Last state of the deployment Central reported, e.g. 'VALIDATED' or 'FAILED', empty if unknown
@@ -52,8 +53,15 @@ runs:
       run: |
         FILE="${RUNNER_TEMP}/central-deployment/deployment-id"
         if [ -s "$FILE" ]; then
-          echo "deployment-id=$(cat "$FILE")" >> "$GITHUB_OUTPUT"
-          echo "deployment $(cat "$FILE") was uploaded before, it is not uploaded again"
+          ID="$(cat "$FILE")"
+          # a job that ran project code could have left the artifact as well, only a plain id is used. Without one the
+          # earlier attempt may still have uploaded the bundle, so nothing is uploaded again
+          if [[ ! "$ID" =~ ^[A-Za-z0-9-]+$ ]] || [ "$ID" = unknown ]; then
+            echo "::error::an earlier attempt may have uploaded the bundle, but left no deployment id of Central. Tag and commits stay, see ${CENTRAL_URL:-https://central.sonatype.com}/publishing/deployments"
+            exit 1
+          fi
+          echo "deployment-id=${ID}" >> "$GITHUB_OUTPUT"
+          echo "deployment ${ID} was uploaded before, it is not uploaded again"
         fi
 
     - name: Sign the bundle

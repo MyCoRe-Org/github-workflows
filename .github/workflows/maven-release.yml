@@ -691,8 +691,14 @@ jobs:
         if: always()
         run: |
           DIR="${RUNNER_TEMP}/central-deployment"
-          echo "deployment-id=$(cat "${DIR}/deployment-id" 2> /dev/null || true)" >> "$GITHUB_OUTPUT"
-          echo "state=$(cat "${DIR}/state" 2> /dev/null || true)" >> "$GITHUB_OUTPUT"
+          ID="$(cat "${DIR}/deployment-id" 2> /dev/null || true)"
+          STATE="$(cat "${DIR}/state" 2> /dev/null || true)"
+          # the directory also holds the artifact of an earlier attempt, only plain values go into the outputs. An id
+          # that is not plain still stands for an upload, the release is not rolled back then
+          [[ "$ID" =~ ^[A-Za-z0-9-]*$ ]] || ID=unknown
+          [[ "$STATE" =~ ^[A-Z_]*$ ]] || STATE=''
+          echo "deployment-id=${ID}" >> "$GITHUB_OUTPUT"
+          echo "state=${STATE}" >> "$GITHUB_OUTPUT"
 
   # pushes the images build made, after the release is on Central
   images:

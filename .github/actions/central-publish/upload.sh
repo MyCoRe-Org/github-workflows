@@ -17,11 +17,15 @@ ID="$(curl -sS --fail-with-body --connect-timeout 30 -H @"$HEADERS" \
   -F "bundle=@${SIGNED_BUNDLE};type=application/octet-stream" \
   "${CENTRAL_URL}/api/v1/publisher/upload?publishingType=AUTOMATIC&name=${NAME}")"
 ID="$(tr -d '"[:space:]' <<< "$ID")"
-if [ -z "$ID" ]; then
-  echo "::error::Central returned no deployment id"
+mkdir -p "${RUNNER_TEMP}/central-deployment"
+# Central took the bundle, an answer without a plain id is kept as the id unknown: the release may be published, it is
+# not rolled back, and a re-run does not upload it again
+if [[ ! "$ID" =~ ^[A-Za-z0-9-]+$ ]]; then
+  printf 'unknown' > "${RUNNER_TEMP}/central-deployment/deployment-id"
+  echo "deployment-id=unknown" >> "$GITHUB_OUTPUT"
+  echo "::error::Central took the bundle but returned no plain deployment id: $(cut -c1-200 <<< "$ID"). Tag and commits stay, see ${CENTRAL_URL}/publishing/deployments"
   exit 1
 fi
 echo "deployment-id=${ID}" >> "$GITHUB_OUTPUT"
-mkdir -p "${RUNNER_TEMP}/central-deployment"
 printf '%s' "$ID" > "${RUNNER_TEMP}/central-deployment/deployment-id"
 echo "uploaded as deployment ${ID}"

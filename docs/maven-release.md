@@ -221,7 +221,8 @@ account.
 "Re-run failed jobs" continues a run with the artifacts of prepare and build, which are kept for a day:
 - After a failing push, e.g. because of the GitHub App, as long as nobody pushed to the branch in the meantime.
 - After publish failed once the bundle was uploaded. publish keeps the id of the deployment as artifact and, run again,
-  waits for that deployment instead of uploading the version a second time, which Central would refuse.
+  waits for that deployment instead of uploading the version a second time, which Central would refuse. If Central
+  returned no id for the upload, publish fails again without uploading, see the deployments on Central.
 - After a failing images or github-release job.
 - Not after a rollback: publish then refuses to run, as the tag is gone. Start a new run.
 
