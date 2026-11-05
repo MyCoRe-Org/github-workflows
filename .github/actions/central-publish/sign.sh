@@ -17,8 +17,10 @@ WORK="$(mktemp -d)"
 GNUPGHOME="$(mktemp -d)"
 export GNUPGHOME
 trap 'gpgconf --kill gpg-agent > /dev/null 2>&1 || true; rm -rf "$WORK" "$GNUPGHOME"' EXIT
-unzip -q "$BUNDLE" -d "$WORK"
-[ -z "$(find "$WORK" ! -type f ! -type d -print -quit)" ] || fail "the bundle contains links or other special files"
+# extracted with zipfile like the check reads it, not with unzip. The check refused links and other special files,
+# zipfile would extract them as files
+python3 -I -c 'import sys, zipfile
+zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$BUNDLE" "$WORK"
 
 gpg --batch --quiet --import <<< "$GPG_PRIVATE_KEY"
 echo "signing with $(gpg --batch --list-secret-keys --with-colons | awk -F: '$1 == "fpr" { print $10; exit }')"
