@@ -19,7 +19,7 @@ from xml.sax.saxutils import escape
 # bytecode in the directory of the action
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "central-bundle-check"))
-from pom_components import NAME, components, fail  # noqa: E402
+from pom_components import NAME, components, fail, has_control  # noqa: E402
 
 # metadata of the staging repository of the plugin
 METADATA = "maven-metadata-central-staging.xml"
@@ -65,6 +65,9 @@ def main():
     found = {}
     for path in sorted(staging.rglob("*")):
         relative = path.relative_to(staging).as_posix()
+        # the build wrote the names
+        if has_control(relative):
+            fail("the staging directory contains a name with a control character")
         if path.is_symlink() or not (path.is_file() or path.is_dir()):
             fail(f"the staging directory contains the link or special file {relative}")
         if path.is_dir() or relative == INDEX:
