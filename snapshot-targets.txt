@@ -1,1 +1,2 @@
 # <owner/repository> <workflow> [<branch or pattern>]
+MyCoRe-Org/mycore-lta-plugin maven-snapshot.yml
