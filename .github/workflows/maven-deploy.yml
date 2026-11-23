@@ -145,7 +145,7 @@ jobs:
             org.apache.maven.plugins:maven-help-plugin:3.5.2:evaluate -Dexpression=maven-deploy-plugin.version \
             -DforceStdout || true)"
           if [[ ! "$DEPLOY_PLUGIN" =~ ^3\.[1-9][0-9]*\.[0-9]+$ ]]; then
-            echo "::error::the parent manages no maven-deploy-plugin 3.1 or newer but '${DEPLOY_PLUGIN}', mycore-parent 57 or newer is required"
+            echo "::error::the property maven-deploy-plugin.version is no version 3.1 or newer but '${DEPLOY_PLUGIN}', set it in the pom or use mycore-parent 57 or newer"
             exit 1
           fi
           echo "deploy-plugin-version=${DEPLOY_PLUGIN}" >> "$GITHUB_OUTPUT"
@@ -169,12 +169,12 @@ jobs:
             [ -n "$DEPLOYED" ] || DEPLOYED="$(find "$STRAY" -type f -printf '%P ')"
             DEPLOYED="$(tr -d '[:cntrl:]' <<< "${DEPLOYED% }")"
             [ "${#DEPLOYED}" -le 200 ] || DEPLOYED="${DEPLOYED:0:200}..."
-            echo "::error::the build deployed ${DEPLOYED} without the central-publishing-maven-plugin, deploy-to-central of mycore-parent 57 or newer must stage every module"
+            echo "::error::the build deployed ${DEPLOYED} without the central-publishing-maven-plugin, it must stage every module, like deploy-to-central of mycore-parent 57 or newer"
             exit 1
           fi
           # the hidden .index of the plugin is no snapshot, upload-artifact leaves it out
           if [ -z "$(find "$STAGING" -type f ! -name '.*' -print -quit 2> /dev/null)" ]; then
-            echo "::error::the build staged nothing in ${STAGING}, deploy-to-central of mycore-parent 57 or newer stages the snapshots"
+            echo "::error::the build staged nothing in ${STAGING}, the central-publishing-maven-plugin must stage the snapshots, like deploy-to-central of mycore-parent 57 or newer"
             exit 1
           fi
 

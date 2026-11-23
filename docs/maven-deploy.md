@@ -53,6 +53,49 @@ No profile of the project may declare the `central-publishing-maven-plugin` with
 wins over `central-publishing-version`, knows no `skipUpload` and lets the build fail with an upload it has no
 credentials for. Remove such profiles when switching to this workflow.
 
+### Without mycore-parent
+
+The workflow does not check the parent, only what the build does. A project with another parent, or without one,
+deploys as well if its poms provide what `mycore-parent` brings:
+
+| Requirement                                                                                                               | `mycore-parent` 57 or newer                                       |
+|---------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------|
+| `mvn deploy` without `-P` runs the `central-publishing-maven-plugin` with `<extensions>true</extensions>` in every module | profile `deploy-to-central`, active without `skipDeployToCentral` |
+| Its version is `${central-publishing-maven-plugin.version}`, so `central-publishing-version` replaces it                  | yes                                                               |
+| The property `maven-deploy-plugin.version` is 3.1 or newer, the upload uses that version                                  | yes                                                               |
+| Modules that are not published are left out with `skipPublishing` or `excludeArtifacts` of the plugin                     | `skipPublishing`                                                  |
+
+```xml
+<properties>
+  <central-publishing-maven-plugin.version>0.12.0</central-publishing-maven-plugin.version>
+  <maven-deploy-plugin.version>3.1.4</maven-deploy-plugin.version>
+</properties>
+
+<profiles>
+  <profile>
+    <id>deploy-to-central</id>
+    <activation>
+      <property>
+        <name>!skipDeployToCentral</name>
+      </property>
+    </activation>
+    <build>
+      <plugins>
+        <plugin>
+          <groupId>org.sonatype.central</groupId>
+          <artifactId>central-publishing-maven-plugin</artifactId>
+          <version>${central-publishing-maven-plugin.version}</version>
+          <extensions>true</extensions>
+        </plugin>
+      </plugins>
+    </build>
+  </profile>
+</profiles>
+```
+
+The snapshots still go to `https://central.sonatype.com/repository/maven-snapshots`, the upload ignores the
+repositories of the poms. `groupId` and modules are checked as described in [How it works](#how-it-works).
+
 ## Inputs
 
 | Input                        | Required | Default  | Description                                                                                                                  |
