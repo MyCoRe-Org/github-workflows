@@ -54,7 +54,7 @@ The workflow needs no secrets.
    The line is split at whitespace, quotes are not interpreted and patterns like `*` are passed on unchanged.
 5. If the build fails or is cancelled and `failure-logs` is set, the matching files are uploaded as artifact `failure-logs-name`.
 
-GitHub Actions sets `CI=true`. This activates the `ci` profile of `mycore-parent`, which among other things
+GitHub Actions sets `CI=true`. With `mycore-parent` this activates its `ci` profile, which among other things
 verifies that the poms are sorted. Run `CI=true mvn verify` to reproduce such failures locally.
 
 ## Project setup

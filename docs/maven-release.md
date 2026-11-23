@@ -69,6 +69,9 @@ Other project specific steps run in the caller after the release, using the `ver
   `central-publishing-version`, 0.12.0 or newer, the first version that creates the bundle without uploading it
   (`-DskipUpload=true`). No profile of the project may declare that plugin with a version of its own, like the old
   `deploy-to-sonatype` profiles of some plugins, see [`maven-deploy.yml`](maven-deploy.md#requirements).
+  Without `mycore-parent` the poms provide the same, see [Without mycore-parent](maven-deploy.md#without-mycore-parent).
+  The build of the tag must then attach sources and javadoc itself, Central requires them, and `build-args` names no
+  `release-profile`, e.g. `'-DskipTests'`. Set `dependency-property` to `''` if the project has no `mycore.version`.
 - An own `<scm>` section in the root `pom.xml` with `connection`, `developerConnection` and `url` of the repository.
   An inherited one points to the repository of the parent.
 - The [environment `release`](../README.md#the-environment-release) with the Central token and the signing key.

@@ -376,14 +376,14 @@ jobs:
             [ -n "$DEPLOYED" ] || DEPLOYED="$(find "$STRAY" -type f -printf '%P ')"
             DEPLOYED="$(tr -d '[:cntrl:]' <<< "${DEPLOYED% }")"
             [ "${#DEPLOYED}" -le 200 ] || DEPLOYED="${DEPLOYED:0:200}..."
-            echo "::error::the build deployed ${DEPLOYED} without the central-publishing-maven-plugin, deploy-to-central of mycore-parent 57 or newer must stage every module"
+            echo "::error::the build deployed ${DEPLOYED} without the central-publishing-maven-plugin, it must stage every module, like deploy-to-central of mycore-parent 57 or newer"
             exit 1
           fi
           # in the build directory of the first project with the plugin, usually the root
           mapfile -t BUNDLES < <(find . -name node_modules -prune -o -type f \
             -path '*/target/central-publishing/central-bundle.zip' -print)
           if [ "${#BUNDLES[@]}" -ne 1 ]; then
-            echo "::error::the build created ${#BUNDLES[@]} bundles instead of one, deploy-to-central of mycore-parent 57 or newer creates it"
+            echo "::error::the build created ${#BUNDLES[@]} bundles instead of one, the central-publishing-maven-plugin must create it, like deploy-to-central of mycore-parent 57 or newer"
             exit 1
           fi
           mv "${BUNDLES[0]}" "${RUNNER_TEMP}/central-bundle.zip"
