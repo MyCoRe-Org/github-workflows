@@ -10,7 +10,7 @@ inputs:
     required: false
     default: ''
   notes-file:
-    description: File appended to the generated notes, empty to skip
+    description: Files appended to the generated notes in this order, one per line, empty to skip
     required: false
     default: ''
   assets:
@@ -60,10 +60,11 @@ runs:
         gh api --method POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
           "${NOTES_ARGS[@]}" --jq '.body' > "${RUNNER_TEMP}/release-notes.md"
 
-        if [ -n "$NOTES_FILE" ]; then
-          NOTES="$(< "$NOTES_FILE")"
+        while IFS= read -r notes_file; do
+          [ -z "$notes_file" ] && continue
+          NOTES="$(< "$notes_file")"
           printf '\n%s\n' "${NOTES//@VERSION@/$VERSION}" >> "${RUNNER_TEMP}/release-notes.md"
-        fi
+        done <<< "$NOTES_FILE"
 
         gh release create "$TAG" \
           --title "$TAG" \
