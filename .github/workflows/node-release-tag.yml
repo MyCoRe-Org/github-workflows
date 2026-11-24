@@ -1,0 +1,173 @@
+name: Node Release Tag
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
+      version-file:
+        type: string
+        default: 'package.json'
+      environment:
+        type: string
+        default: 'release'
+    secrets:
+      RELEASE_APP_PRIVATE_KEY:
+        required: false
+      MATRIX_ACCESS_TOKEN:
+        required: false
+
+jobs:
+  # runs no code of the project, it only rewrites the version in a JSON file, so it may hold the key of the GitHub App
+  tag:
+    runs-on: ubuntu-latest
+    # must differ from the group of the caller, equal groups deadlock
+    concurrency:
+      group: node-release-tag-job-${{ github.repository }}
+      cancel-in-progress: false
+    # holds the key of the GitHub App, its deployment branches decide which branches may release
+    environment: ${{ inputs.environment }}
+    cache-mode: none
+    permissions:
+      contents: read
+    steps:
+      - uses: $/.github/actions/check-trigger
+        with:
+          workflow: node-release-tag
+          dispatch-actor: ${{ vars.DISPATCH_ACTOR }}
+
+      # a push with GITHUB_TOKEN starts no workflow, the tag would never be published
+      - name: Check the GitHub App
+        env:
+          CLIENT_ID: ${{ vars.RELEASE_APP_CLIENT_ID }}
+        run: |
+          if [ -z "$CLIENT_ID" ]; then
+            echo "::error::RELEASE_APP_CLIENT_ID is not set, a tag pushed with GITHUB_TOKEN would not start the release"
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the inputs
+        env:
+          VERSION: ${{ inputs.version }}
+          VERSION_FILE: ${{ inputs.version-file }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::version '${VERSION}' is not a version like 1.2.3 or 1.2.3-beta.1, without a leading v"
+            exit 1
+          fi
+          if [ ! -f "$VERSION_FILE" ]; then
+            echo "::error::version-file '${VERSION_FILE}' does not exist"
+            exit 1
+          fi
+
+      - name: Set the version
+        env:
+          VERSION: ${{ inputs.version }}
+          VERSION_FILE: ${{ inputs.version-file }}
+        run: |
+          set -euo pipefail
+          # npm version would run the version scripts of the project, this keeps indentation and key order
+          node -e '
+            const fs = require("fs");
+            const [file, version] = process.argv.slice(1);
+            const text = fs.readFileSync(file, "utf8");
+            const data = JSON.parse(text);
+            if (typeof data.version !== "string") {
+              console.error("::error::" + file + " has no version");
+              process.exit(1);
+            }
+            if (data.version === version) {
+              console.error("::error::" + file + " is at " + version + " already");
+              process.exit(1);
+            }
+            const indent = text.match(/^[ \t]+(?=")/m)?.[0] ?? "  ";
+            data.version = version;
+            fs.writeFileSync(file, JSON.stringify(data, null, indent) + text.slice(text.trimEnd().length));
+          ' "$VERSION_FILE" "$VERSION"
+          # anything but the version line means the file was formatted differently, it is not rewritten then
+          CHANGES="$(git diff --numstat)"
+          if [ "$CHANGES" != "$(printf '1\t1\t%s' "$VERSION_FILE")" ]; then
+            echo "::error::setting the version would change more than one line, set it by hand:"
+            git diff
+            exit 1
+          fi
+
+      - name: Commit and tag
+        env:
+          VERSION: ${{ inputs.version }}
+          VERSION_FILE: ${{ inputs.version-file }}
+          ACTOR: ${{ github.actor }}
+          ACTOR_ID: ${{ github.actor_id }}
+        run: |
+          set -euo pipefail
+          git config user.name "$ACTOR"
+          # the noreply address with the id links the commits to the account, also after a rename
+          git config user.email "${ACTOR_ID}+${ACTOR}@users.noreply.github.com"
+          git -c core.hooksPath=/dev/null commit --quiet -m "chore(release): v${VERSION}" -- "$VERSION_FILE"
+          git -c core.hooksPath=/dev/null tag -a "v${VERSION}" -m "v${VERSION}"
+
+      # valid for one hour and for this repository only, so it is created right before the push
+      - name: Create the push token
+        id: push-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+
+      # the tag starts the release workflow of the project, which publishes it with node-release.yml
+      - name: Push the release commit and the tag
+        env:
+          VERSION: ${{ inputs.version }}
+          TOKEN: ${{ steps.push-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          AUTH="$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+          echo "::add-mask::${AUTH}"
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/.extraheader" \
+            GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${AUTH}"
+          STATUS=0
+          git ls-remote --exit-code origin "refs/tags/v${VERSION}" > /dev/null || STATUS=$?
+          case "$STATUS" in
+            0)
+              echo "::error::the tag v${VERSION} exists already"
+              exit 1
+              ;;
+            2) ;;
+            *)
+              echo "::error::cannot check whether the tag v${VERSION} exists"
+              exit 1
+              ;;
+          esac
+          git -c core.hooksPath=/dev/null push --atomic origin \
+            "HEAD:refs/heads/${GITHUB_REF_NAME}" "refs/tags/v${VERSION}"
+
+  notify:
+    needs: tag
+    if: ${{ failure() }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Compose the notification
+        id: notification
+        env:
+          REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          echo "message=❌ Tagging v${VERSION} of ${REPOSITORY} failed: ${RUN_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Notify Matrix
+        continue-on-error: true
+        uses: $/.github/actions/matrix-notify
+        with:
+          message: ${{ steps.notification.outputs.message }}
+          homeserver: ${{ vars.MATRIX_HOMESERVER }}
+          room-id: ${{ vars.MATRIX_ROOM_ID }}
+          token: ${{ secrets.MATRIX_ACCESS_TOKEN }}

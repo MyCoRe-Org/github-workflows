@@ -1,6 +1,6 @@
 {
   "name": "MyCoRe Node Release",
-  "description": "Publishes the package with npm trusted publishing and creates a GitHub release for version tags.",
+  "description": "Publishes the package with npm trusted publishing and creates a GitHub release for version tags, which it can also set and push by hand.",
   "categories": [
     "JavaScript",
     "TypeScript"
