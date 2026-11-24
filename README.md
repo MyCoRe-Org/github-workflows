@@ -13,6 +13,7 @@ Reusable GitHub workflows and actions for MyCoRe projects.
 | [`maven-version-branch.yml`](docs/maven-version-branch.md) | Create a version branch and set the next development version       |
 | [`node-build.yml`](docs/node-build.md)                     | Install with Yarn and run package scripts                          |
 | [`node-release.yml`](docs/node-release.md)                 | Build, publish and create a GitHub release                         |
+| [`node-release-tag.yml`](docs/node-release-tag.md)         | Set the version and push a release tag, by hand                    |
 | [`forward-merge.yml`](docs/forward-merge.md)               | Open a forward-merge PR from a version branch into the next one    |
 | [`dispatch-downstream.yml`](docs/dispatch-downstream.md)   | Start the snapshot deploy of dependent repositories                |
 | [`require-permission.yml`](docs/require-permission.md)     | Fail unless the triggering user has a minimum permission           |
@@ -71,15 +72,15 @@ read it:
 Pull requests from forks get no secrets, except in workflows started by `pull_request_target`, which must therefore
 never build their code.
 
-| Secret                                           | Used by                                                                                     | Content                                                                    |
-|--------------------------------------------------|---------------------------------------------------------------------------------------------|----------------------------------------------------------------------------|
-| `MAVEN_USERNAME` / `MAVEN_PASSWORD`              | `maven-deploy.yml`, `maven-deploy-pr.yml`, `maven-release.yml`                              | Sonatype Central token for the `org.mycore` namespace                      |
-| `MAVEN_GPG_PRIVATE_KEY` / `MAVEN_GPG_PASSPHRASE` | `maven-release.yml`                                                                         | Signing key                                                                |
-| `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`         | `maven-deploy.yml`, `maven-release.yml`                                                     | Docker Hub login, needed with `docker-images`                              |
-| `RELEASE_APP_PRIVATE_KEY`                        | `maven-release.yml`, `maven-version-branch.yml`                                             | Private key of the GitHub App that pushes, see [Push access](#push-access) |
-| `PR_TOKEN`                                       | `forward-merge.yml`                                                                         | Token creating the forward-merge PR                                        |
-| `DISPATCH_TOKEN`                                 | `dispatch-downstream.yml`, `snapshot-refresh.yml`                                           | Token with `actions: write` on the target repositories                     |
-| `MATRIX_ACCESS_TOKEN`                            | `maven-release.yml`, `maven-version-branch.yml`, `node-release.yml`, `snapshot-refresh.yml` | Access token of the Matrix account sending notifications                   |
+| Secret                                           | Used by                                                                                                             | Content                                                                    |
+|--------------------------------------------------|---------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------|
+| `MAVEN_USERNAME` / `MAVEN_PASSWORD`              | `maven-deploy.yml`, `maven-deploy-pr.yml`, `maven-release.yml`                                                      | Sonatype Central token for the `org.mycore` namespace                      |
+| `MAVEN_GPG_PRIVATE_KEY` / `MAVEN_GPG_PASSPHRASE` | `maven-release.yml`                                                                                                 | Signing key                                                                |
+| `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`         | `maven-deploy.yml`, `maven-release.yml`                                                                             | Docker Hub login, needed with `docker-images`                              |
+| `RELEASE_APP_PRIVATE_KEY`                        | `maven-release.yml`, `maven-version-branch.yml`, `node-release-tag.yml`                                             | Private key of the GitHub App that pushes, see [Push access](#push-access) |
+| `PR_TOKEN`                                       | `forward-merge.yml`                                                                                                 | Token creating the forward-merge PR                                        |
+| `DISPATCH_TOKEN`                                 | `dispatch-downstream.yml`, `snapshot-refresh.yml`                                                                   | Token with `actions: write` on the target repositories                     |
+| `MATRIX_ACCESS_TOKEN`                            | `maven-release.yml`, `maven-version-branch.yml`, `node-release.yml`, `node-release-tag.yml`, `snapshot-refresh.yml` | Access token of the Matrix account sending notifications                   |
 
 The secrets of releases are secrets of the [environment `release`](#the-environment-release) in each repository that
 releases: the Central token, the signing key, the key of the GitHub App and, with release images, the Docker Hub login.
@@ -124,6 +125,7 @@ Releases and version branches push to protected branches with a GitHub App of th
 
 The workflows create a token right before each push, valid for one hour and only for the repository of the run.
 Without `RELEASE_APP_CLIENT_ID` they push with `GITHUB_TOKEN`, which fails on protected branches and starts no workflows.
+`node-release-tag.yml` needs the tag it pushes to start the release, it fails without `RELEASE_APP_CLIENT_ID`.
 Do not make GitHub Actions itself a bypass actor of a ruleset, then every workflow on every branch could push past it.
 
 ### Variables
@@ -131,10 +133,10 @@ Do not make GitHub Actions itself a bypass actor of a ruleset, then every workfl
 The workflows read these organization variables from the calling repository, like the ones of the
 [notifications](#notifications):
 
-| Variable                | Used by                                         | Content                                                                         |
-|-------------------------|-------------------------------------------------|---------------------------------------------------------------------------------|
-| `RELEASE_APP_CLIENT_ID` | `maven-release.yml`, `maven-version-branch.yml` | Client ID of the GitHub App that pushes                                         |
-| `DISPATCH_ACTOR`        | `maven-release.yml`, `maven-version-branch.yml` | Login of the account of `DISPATCH_TOKEN`, refused as starter of these workflows |
+| Variable                | Used by                                                                 | Content                                                                         |
+|-------------------------|-------------------------------------------------------------------------|---------------------------------------------------------------------------------|
+| `RELEASE_APP_CLIENT_ID` | `maven-release.yml`, `maven-version-branch.yml`, `node-release-tag.yml` | Client ID of the GitHub App that pushes                                         |
+| `DISPATCH_ACTOR`        | `maven-release.yml`, `maven-version-branch.yml`, `node-release-tag.yml` | Login of the account of `DISPATCH_TOKEN`, refused as starter of these workflows |
 
 ## Notifications
 
@@ -145,6 +147,7 @@ Releases, version branches and failures of the snapshot refresh are reported to 
 | `maven-release.yml`        | Released, released with a failing Docker push or GitHub release, failed or cancelled, rolled back |
 | `maven-version-branch.yml` | Branch created or failed                                                                          |
 | `node-release.yml`         | Published, published without GitHub release, failed                                               |
+| `node-release-tag.yml`     | Failed                                                                                            |
 | `snapshot-refresh.yml`     | Failed, with the failing targets                                                                  |
 
 The room is set by organization variables, which the workflows read from the calling repository:
