@@ -79,11 +79,11 @@ jobs:
             const text = fs.readFileSync(file, "utf8");
             const data = JSON.parse(text);
             if (typeof data.version !== "string") {
-              console.error(`::error::${file} has no version`);
+              console.error("::error::" + file + " has no version");
               process.exit(1);
             }
             if (data.version === version) {
-              console.error(`::error::${file} is at ${version} already`);
+              console.error("::error::" + file + " is at " + version + " already");
               process.exit(1);
             }
             const indent = text.match(/^[ \t]+(?=")/m)?.[0] ?? "  ";
