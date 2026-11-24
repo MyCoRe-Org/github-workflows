@@ -123,13 +123,19 @@ jobs:
             echo "::error::environment is empty, the release secrets belong in an environment"
             exit 1
           fi
+          COORDINATES=0
           while read -r coordinate extra; do
             [ -z "$coordinate" ] && continue
             if [ -n "$extra" ] || [[ ! "$coordinate" =~ ^[A-Za-z0-9._-]+(:[A-Za-z0-9._-]+)?$ ]]; then
               echo "::error::release-coordinates must name one groupId:artifactId or artifactId per line"
               exit 1
             fi
+            COORDINATES=$((COORDINATES + 1))
           done <<< "$RELEASE_COORDINATES"
+          if [ -n "$RELEASE_COORDINATES" ] && [ "$COORDINATES" -eq 0 ]; then
+            echo "::error::release-coordinates is set but names no component"
+            exit 1
+          fi
           for value in "$RELEASE_VERSION" "$DEV_VERSION" "$DEPENDENCY_VERSION" "$DEPENDENCY_DEV_VERSION" "$DEPENDENCY_ARTIFACT"; do
             if [[ "$value" =~ [[:space:]] ]]; then
               echo "::error::'${value}' contains whitespace"

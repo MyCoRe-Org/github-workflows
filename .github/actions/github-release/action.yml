@@ -1,12 +1,12 @@
 name: GitHub Release
-description: Create a GitHub release with generated notes, an optional notes file and assets.
+description: Create a GitHub release with generated notes, optional notes files and assets.
 
 inputs:
   tag:
     description: Tag of the release (e.g. 'v2025.06.2')
     required: true
   version:
-    description: Value replacing '@VERSION@' in the notes file, defaults to the tag without leading 'v'
+    description: Value replacing '@VERSION@' in the notes files, defaults to the tag without leading 'v'
     required: false
     default: ''
   notes-file:

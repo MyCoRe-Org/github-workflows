@@ -91,7 +91,7 @@ def main():
                 dependency.append("  <type>war</type>")
             dependencies.append("\n".join(dependency + ["</dependency>"]))
 
-        binaries = [link(c, e) for c, e in files if e != "pom" and c not in ("sources", "javadoc")]
+        binaries = [link(c, e) for c, e in files if not c and e != "pom"]
         sources = [link(c, e) for c, e in files if c == "sources"]
         javadoc = [link(c, e) for c, e in files if c == "javadoc"]
         pom = [link(c, e) for c, e in files if not c and e == "pom"]
@@ -104,7 +104,9 @@ def main():
         sections.append("## Maven\n\n```xml\n" + "\n\n".join(dependencies) + "\n```")
     sections.append("## Download\n\n| Artifact | Binary | Sources | Javadoc | POM |\n| --- | --- | --- | --- | --- |\n"
                     + "\n".join(rows))
-    Path(os.environ["OUTPUT"]).write_text("\n\n".join(sections) + "\n", encoding="utf-8")
+    output = Path(os.environ["OUTPUT"])
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text("\n\n".join(sections) + "\n", encoding="utf-8")
     print(f"the release notes name {len(selected)} components, {len(dependencies)} of them as dependency")
 
 
