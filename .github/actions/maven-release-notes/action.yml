@@ -1,0 +1,30 @@
+name: Maven Release Notes
+description: >-
+  Write the Maven section of the release notes from a bundle for Central: a dependency for every named component with
+  a jar or war, and a table with the links to its files on Maven Central. Reads only the entries of the bundle.
+
+inputs:
+  bundle:
+    description: Path of the bundle for Central
+    required: true
+  version:
+    description: Version of the release
+    required: true
+  coordinates:
+    description: Components of the bundle, one per line, as groupId:artifactId or artifactId
+    required: true
+  output:
+    description: File the section is written to
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        BUNDLE: ${{ inputs.bundle }}
+        VERSION: ${{ inputs.version }}
+        COORDINATES: ${{ inputs.coordinates }}
+        OUTPUT: ${{ inputs.output }}
+      run: |
+        python3 -I "$GITHUB_ACTION_PATH/notes.py"

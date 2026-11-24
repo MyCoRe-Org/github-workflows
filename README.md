@@ -49,12 +49,13 @@ The workflows are built from these composite actions.
 | [`maven-pom-pin`](.github/actions/maven-pom-pin/action.yml)               | Set a version property and the scm url in a `pom.xml`, return the previous values                       |
 | [`docker-build`](.github/actions/docker-build/action.yml)                 | Build images without credentials and save them to an archive                                            |
 | [`docker-push`](.github/actions/docker-push/action.yml)                   | Load the images of `docker-build`, tag them and push them to Docker Hub                                 |
-| [`github-release`](.github/actions/github-release/action.yml)             | Create a GitHub release with generated notes, a notes file and assets                                   |
+| [`github-release`](.github/actions/github-release/action.yml)             | Create a GitHub release with generated notes, notes files and assets                                    |
 | [`workflow-dispatch`](.github/actions/workflow-dispatch/action.yml)       | Dispatch workflows in other repositories, optionally wait for their results                             |
 | [`matrix-notify`](.github/actions/matrix-notify/action.yml)               | Send a message to a Matrix room                                                                         |
 | [`check-trigger`](.github/actions/check-trigger/action.yml)               | Fail unless the run is on a branch and not started by the account of `DISPATCH_TOKEN`                   |
 | [`pom-diff-check`](.github/actions/pom-diff-check/action.yml)             | Fail unless a commit changes nothing but given values in `pom.xml` files                                |
 | [`central-bundle-check`](.github/actions/central-bundle-check/action.yml) | Check that a bundle for Central holds only unsigned files of the project and its modules in one version |
+| [`maven-release-notes`](.github/actions/maven-release-notes/action.yml)   | Write the Maven coordinates and download links of components of a bundle for Central as release notes   |
 | [`central-publish`](.github/actions/central-publish/action.yml)           | Check and sign a bundle for Central, upload it and wait for its validation                              |
 | [`snapshot-upload`](.github/actions/snapshot-upload/action.yml)           | Check the snapshots of a build against the poms of the project, upload them                             |
 

@@ -92,6 +92,7 @@ Other project specific steps run in the caller after the release, using the `ver
 | `maven-opts`                     | no              |                                              | `MAVEN_OPTS` of prepare and build, e.g. `-Xss128M`                                                                               |
 | `group-id-prefix`                | no              | `org.mycore`                                 | groupId every published file must have, or start with followed by a dot                                                          |
 | `release-notes-file`             | no              |                                              | File in the repository appended to the release notes, `@VERSION@` is replaced                                                    |
+| `release-coordinates`            | no              |                                              | Components for the Maven section of the release notes, one per line, see [Release notes](#release-notes-and-assets)              |
 | `release-assets`                 | no              | jars and wars of the root and of each module | Glob patterns of files attached to the GitHub release, one per line, empty to attach none                                        |
 | `docker-images`                  | no              |                                              | Images to push, see [Docker images](#docker-images)                                                                              |
 | `setup-browser`                  | no              | `false`                                      | See [`maven-build.yml`](maven-build.md)                                                                                          |
@@ -186,6 +187,8 @@ flowchart LR
      the run here.
    - Every component in the bundle for Central has its pom and every file its md5 and sha1, Central refuses the
      bundle otherwise.
+   - Every component of `release-coordinates` is in the bundle for Central. push writes the
+     [Maven section](#release-notes-and-assets) of the release notes from it and keeps it as artifact for one day.
 
    Then branch and tag are pushed in one atomic push, with a token of the GitHub App created right before.
    If someone pushed to the branch in the meantime, nothing is pushed and the run fails.
@@ -196,7 +199,8 @@ flowchart LR
    the publisher API of Central for automatic publishing and waits up to 30 minutes until Central has validated it.
 6. **images** and **github-release** run after a successful publish, independently of each other. images pushes the
    images of build, tagged with the version. github-release creates the GitHub release `v<version>` with the notes
-   GitHub generates since the previous `v*` tag, the [notes file](#release-notes-and-assets) and the assets.
+   GitHub generates since the previous `v*` tag, the [Maven section and the notes file](#release-notes-and-assets)
+   and the assets.
 7. **rollback** runs if publish failed or was cancelled before the upload, or if Central refused the upload. It
    reverts the release commits in one commit "Roll back the release of v&lt;version&gt;", pushes it and deletes the
    tag in one atomic push. The poms are the ones of before the release, commits pushed since the release stay.
@@ -270,20 +274,31 @@ The tags `v*` of the repository should only change through this workflow:
 
 ## Release notes and assets
 
-`release-notes-file` is a file in the repository, appended to the generated notes, with `@VERSION@` replaced
-by the version. It is the place for the Maven coordinates and download links:
+`release-coordinates` names components of the bundle for Central, one per line, as `groupId:artifactId` or as
+`artifactId` alone if no other component has it. The release notes then get a section `Maven` with a dependency for
+each of them with a jar or a war, and a section `Download` with a table of the links to their files on Maven Central:
+binaries, sources, javadoc and pom, as far as the bundle has them, and the page of the component on Central. A name
+that is no component of the bundle fails push, before anything is pushed. For `mir`:
 
-````markdown
-## Maven
-
-```xml
-<dependency>
-  <groupId>org.mycore</groupId>
-  <artifactId>mycore-base</artifactId>
-  <version>@VERSION@</version>
-</dependency>
+```yaml
+    with:
+      release-coordinates: |
+        mir-module
+        mir-layout
+        mir-common-resources
+        mir-wizard
+        mir-webapp
+        mir-cli
 ```
-````
+
+`release-notes-file` is a file in the repository, appended after it, with `@VERSION@` replaced by the version, e.g.
+for the Docker images:
+
+```markdown
+## Docker
+
+`mycoreorg/mir:@VERSION@` and `mycoreorg/mir-solr:@VERSION@`
+```
 
 `release-assets` attaches the jars and wars of the root project and of each module of the build of the tag by default.
 Projects with many modules, like `mycore`, set it to `''`.
