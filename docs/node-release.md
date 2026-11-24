@@ -27,7 +27,8 @@ jobs:
 
 The workflow must run on a tag, it fails on branches to avoid a release named after the branch.
 The published version comes from the package metadata, e.g. `package.json`, not from the tag,
-so set both to the same version before tagging.
+so set both to the same version before tagging. The workflow fails before building if the version in `version-file`
+does not match the tag without its leading `v`.
 
 ## Inputs
 
@@ -38,6 +39,7 @@ so set both to the same version before tagging.
 | `publish-command` | no       | `npm publish "$PACKAGE" --access public` | Publish command, `$PACKAGE` is the packed package, e.g. `npx jsr@0.14.3 publish` |
 | `registry-url`    | no       | `https://registry.npmjs.org`             | Registry for publishing                                                          |
 | `create-release`  | no       | `true`                                   | Create a GitHub release for the tag                                              |
+| `version-file`    | no       | `package.json`                           | JSON file whose `version` has to match the tag, e.g. `jsr.json`                  |
 
 | Secret                | Description                                               |
 |-----------------------|-----------------------------------------------------------|
@@ -48,8 +50,9 @@ so set both to the same version before tagging.
 The release runs in three jobs, so the code of the dependencies never runs with the permission to publish:
 
 1. **build**, with read access only. A tag check stops runs on branches, [`node-setup`](../.github/actions/node-setup/action.yml)
-   installs the dependencies as in [`node-build.yml`](node-build.md#how-it-works), `build-script` runs with `yarn run`
-   and `yarn pack` packs the package for the next job.
+   installs the dependencies as in [`node-build.yml`](node-build.md#how-it-works), a version check stops runs whose tag
+   does not match the version in `version-file`, `build-script` runs with `yarn run` and `yarn pack` packs the package
+   for the next job.
 2. **publish**, with `id-token: write` and `contents: write`. It installs nothing, runs `publish-command` with the
    packed package in `$PACKAGE`, and with `create-release` creates the GitHub release for the tag with the notes
    GitHub generates since the previous `v*` tag.
@@ -83,4 +86,5 @@ so it names a fixed version of `jsr`:
       node-version: '24'
       build-script: ''
       publish-command: npx jsr@0.14.3 publish
+      version-file: jsr.json
 ```
