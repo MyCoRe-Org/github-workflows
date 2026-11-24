@@ -18,6 +18,9 @@ on:
       create-release:
         type: boolean
         default: true
+      version-file:
+        type: string
+        default: 'package.json'
     secrets:
       MATRIX_ACCESS_TOKEN:
         required: false
@@ -40,6 +43,21 @@ jobs:
       - uses: $/.github/actions/node-setup
         with:
           node-version: ${{ inputs.node-version }}
+
+      - name: Check version
+        env:
+          VERSION_FILE: ${{ inputs.version-file }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="$(node -e '
+            const fs = require("fs");
+            const { version } = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            process.stdout.write(typeof version === "string" ? version : "");
+          ' "$VERSION_FILE")"
+          if [ "v${VERSION}" != "$TAG" ]; then
+            echo "::error::Tag ${TAG} does not match version '${VERSION}' in ${VERSION_FILE}"
+            exit 1
+          fi
 
       - name: Build
         if: inputs.build-script != ''
