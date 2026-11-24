@@ -60,9 +60,9 @@ runs:
         gh api --method POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
           "${NOTES_ARGS[@]}" --jq '.body' > "${RUNNER_TEMP}/release-notes.md"
 
-        while IFS= read -r notes_file; do
-          [ -z "$notes_file" ] && continue
-          NOTES="$(< "$notes_file")"
+        while IFS= read -r file; do
+          [ -z "$file" ] && continue
+          NOTES="$(< "$file")"
           printf '\n%s\n' "${NOTES//@VERSION@/$VERSION}" >> "${RUNNER_TEMP}/release-notes.md"
         done <<< "$NOTES_FILE"
 
